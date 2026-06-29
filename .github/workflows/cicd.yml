@@ -21,8 +21,8 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@v5
-      - name: Test
-        run: go test ./...
+      - name: Test (in a Go container; the runner host has no Go toolchain)
+        run: docker run --rm -v "$PWD":/src -w /src golang:1.26-bookworm go test ./...
       - name: Build image (gate - must pass before deploy)
         run: docker compose build
 
