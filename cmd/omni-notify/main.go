@@ -19,6 +19,7 @@ import (
 	"github.com/pod32g/omni-notify/internal/api"
 	"github.com/pod32g/omni-notify/internal/clock"
 	"github.com/pod32g/omni-notify/internal/config"
+	"github.com/pod32g/omni-notify/internal/logship"
 	"github.com/pod32g/omni-notify/internal/metrics"
 	"github.com/pod32g/omni-notify/internal/models"
 	"github.com/pod32g/omni-notify/internal/notifier"
@@ -60,8 +61,19 @@ func run(configPath string) error {
 	if err != nil {
 		return err
 	}
-	log := newLogger(cfg.Log)
+	log, logShutdown, err := newLogger(cfg.Log)
+	if err != nil {
+		return fmt.Errorf("init logging: %w", err)
+	}
 	slog.SetDefault(log)
+	if logShutdown != nil {
+		// Drain buffered logs to omni-logging on every exit path.
+		defer func() {
+			drainCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = logShutdown(drainCtx)
+		}()
+	}
 	log.Info("starting omni-notify", "version", version)
 
 	// Resolve encryption key (config value wins; falls back to env).
@@ -244,15 +256,38 @@ func printGenKey() error {
 	return nil
 }
 
-func newLogger(cfg config.LogConfig) *slog.Logger {
-	opts := &slog.HandlerOptions{Level: parseLevel(cfg.Level)}
-	var h slog.Handler
+// newLogger builds the application logger. It always logs to stdout; when log
+// forwarding is enabled it tees each record to omni-logging as well, returning a
+// shutdown hook that drains buffered records (nil when forwarding is disabled).
+func newLogger(cfg config.LogConfig) (*slog.Logger, func(context.Context) error, error) {
+	level := parseLevel(cfg.Level)
+	opts := &slog.HandlerOptions{Level: level}
+	var stdout slog.Handler
 	if cfg.Format == "json" {
-		h = slog.NewJSONHandler(os.Stdout, opts)
+		stdout = slog.NewJSONHandler(os.Stdout, opts)
 	} else {
-		h = slog.NewTextHandler(os.Stdout, opts)
+		stdout = slog.NewTextHandler(os.Stdout, opts)
 	}
-	return slog.New(h)
+
+	if !cfg.Forward.Enabled {
+		return slog.New(stdout), nil, nil
+	}
+
+	fw, err := logship.New(logship.Config{
+		Endpoint:      cfg.Forward.Endpoint,
+		APIKey:        cfg.Forward.APIKey,
+		Service:       cfg.Forward.Service,
+		BatchSize:     cfg.Forward.BatchSize,
+		BufferSize:    cfg.Forward.BufferSize,
+		FlushInterval: cfg.Forward.FlushInterval.D(),
+		Timeout:       cfg.Forward.Timeout.D(),
+		Level:         level,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	logger := slog.New(logship.NewMultiHandler(stdout, fw.Handler()))
+	return logger, fw.Shutdown, nil
 }
 
 func parseLevel(s string) slog.Level {

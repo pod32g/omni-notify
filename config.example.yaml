@@ -43,6 +43,20 @@ delivery:
 log:
   level: info                   # debug|info|warn|error
   format: text                  # text|json
+  # Optionally tee logs to an omni-logging ingest endpoint (in addition to
+  # stdout). Disabled by default. Forwarding is async and best-effort: if
+  # omni-logging is slow or down, records are dropped rather than blocking the
+  # service. omni-logging must be started with a matching ingest key
+  # (OMNILOG_INGEST_KEYS / --ingest-key) equal to the api_key below.
+  forward:
+    enabled: false
+    endpoint: "http://192.168.68.34:8080/api/v1/ingest"
+    api_key: "${OMNI_LOGGING_API_KEY}"   # X-Api-Key sent to omni-logging
+    service: "omni-notify"               # value of the "service" field
+    batch_size: 100                      # records per POST
+    buffer_size: 10000                   # max queued before dropping
+    flush_interval: 2s                   # flush a partial batch after this long
+    timeout: 5s                          # per-request HTTP timeout
 
 # Providers seeded into SQLite on boot (managed_by=config). Edit/extend at runtime
 # via POST /api/v1/providers (those are managed_by=api and never overwritten here).

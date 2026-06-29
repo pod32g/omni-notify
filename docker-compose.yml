@@ -16,6 +16,10 @@ services:
       # Base64 32-byte key used to encrypt provider secrets at rest. Required
       # whenever any provider has a secret. Secret → host env / CI secret.
       OMNI_NOTIFY_ENCRYPTION_KEY: ${OMNI_NOTIFY_ENCRYPTION_KEY:-}
+      # Ingest key for forwarding logs to omni-logging (config.docker.yml's
+      # log.forward.api_key). Must match an OMNILOG_INGEST_KEYS value on the
+      # omni-logging side. Secret → host .env / CI secret.
+      OMNI_LOGGING_API_KEY: ${OMNI_LOGGING_API_KEY:-}
     ports:
       # host 8088 -> container 8080 (host 8080 is taken by omnilog on the box).
       - "8088:8080"

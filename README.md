@@ -257,6 +257,45 @@ Implementing a new provider: satisfy `providers.Provider` and register it in
 `omni_notify_provider_errors_total`, `omni_notify_active_states`,
 `omni_notify_delivery_duration_seconds`.
 
+## Forwarding logs to omni-logging
+
+Omni-Notify can **tee** its own logs to an
+[omni-logging](https://github.com/pod32g/omni-logging) ingest endpoint while still
+writing them to stdout (so `docker logs` keeps working). Each `slog` record is
+shipped as one NDJSON object to `POST /api/v1/ingest`, with `message`, `level`,
+`timestamp`, and `service` fields plus any structured attributes (slog groups
+flatten to dotted keys, e.g. `http.status`).
+
+Forwarding is **asynchronous and best-effort**: records are buffered and shipped in
+batches by a background goroutine. If omni-logging is slow or down, records are
+**dropped rather than blocking** request handling, and the shipper's own errors go
+to stderr (never back through the log, avoiding a feedback loop).
+
+Enable it under `log.forward`:
+
+```yaml
+log:
+  level: info
+  format: json
+  forward:
+    enabled: true
+    endpoint: "http://192.168.68.34:8080/api/v1/ingest"
+    api_key: "${OMNI_LOGGING_API_KEY}"   # X-Api-Key header
+    service: "omni-notify"
+    # batch_size: 100  buffer_size: 10000  flush_interval: 2s  timeout: 5s
+```
+
+**Prerequisite (omni-logging side):** omni-logging only accepts ingest keys that
+were configured at *its* startup. Start it with a matching key — e.g.
+`OMNILOG_INGEST_KEYS=<key>` (or `--ingest-key <key>`) — and provide the same value
+to omni-notify as `OMNI_LOGGING_API_KEY`. The bundled
+[`config.docker.yml`](config.docker.yml) and [`docker-compose.yml`](docker-compose.yml)
+already wire this env through; just set `OMNI_LOGGING_API_KEY` in your host `.env`.
+
+> The endpoint defaults to the host LAN IP because omni-notify's webhook SSRF guard
+> does not apply to the log shipper — it uses its own plain HTTP client so private
+> targets like `192.168.68.34` are reachable.
+
 ## Configuration
 
 See [`config.example.yaml`](config.example.yaml). `${ENV}` references are resolved

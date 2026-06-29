@@ -35,3 +35,11 @@ delivery:
 log:
   level: info
   format: json
+  # Tee logs to omni-logging (running on this box). Requires omni-logging to be
+  # started with a matching ingest key (OMNILOG_INGEST_KEYS) and the same value
+  # provided here as OMNI_LOGGING_API_KEY in the container environment.
+  forward:
+    enabled: true
+    endpoint: "http://192.168.68.34:8080/api/v1/ingest"
+    api_key: "${OMNI_LOGGING_API_KEY}"
+    service: "omni-notify"

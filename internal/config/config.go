@@ -70,8 +70,23 @@ type DeliveryConfig struct {
 
 // LogConfig controls slog output.
 type LogConfig struct {
-	Level  string `yaml:"level"`  // debug|info|warn|error
-	Format string `yaml:"format"` // text|json
+	Level   string        `yaml:"level"`   // debug|info|warn|error
+	Format  string        `yaml:"format"`  // text|json
+	Forward ForwardConfig `yaml:"forward"` // optional: ship logs to omni-logging
+}
+
+// ForwardConfig controls forwarding logs to an omni-logging ingest endpoint.
+// When Enabled, records are shipped to Endpoint in addition to stdout (a tee),
+// asynchronously and best-effort so logging never blocks the service.
+type ForwardConfig struct {
+	Enabled       bool            `yaml:"enabled"`
+	Endpoint      string          `yaml:"endpoint"`       // POST /api/v1/ingest URL
+	APIKey        string          `yaml:"api_key"`        // X-Api-Key header (supports ${ENV})
+	Service       string          `yaml:"service"`        // "service" field (default "omni-notify")
+	BatchSize     int             `yaml:"batch_size"`     // records per POST (default 100)
+	BufferSize    int             `yaml:"buffer_size"`    // max queued before dropping (default 10000)
+	FlushInterval models.Duration `yaml:"flush_interval"` // partial-batch flush (default 2s)
+	Timeout       models.Duration `yaml:"timeout"`        // per-request timeout (default 5s)
 }
 
 // ProviderSeed is a provider defined in config and seeded into storage on boot.
@@ -238,6 +253,24 @@ func (c *Config) applyZeroDefaults() {
 	if c.Log.Format == "" {
 		c.Log.Format = d.Log.Format
 	}
+	if c.Log.Forward.Enabled {
+		fw := &c.Log.Forward
+		if fw.Service == "" {
+			fw.Service = "omni-notify"
+		}
+		if fw.BatchSize == 0 {
+			fw.BatchSize = 100
+		}
+		if fw.BufferSize == 0 {
+			fw.BufferSize = 10000
+		}
+		if fw.FlushInterval == 0 {
+			fw.FlushInterval = models.Duration(2 * time.Second)
+		}
+		if fw.Timeout == 0 {
+			fw.Timeout = models.Duration(5 * time.Second)
+		}
+	}
 }
 
 // Validate enforces invariants that defaults cannot supply.
@@ -285,6 +318,27 @@ func (c *Config) Validate() error {
 			if !seenProviders[pn] {
 				return fmt.Errorf("route %q references unknown provider %q", r.Name, pn)
 			}
+		}
+	}
+	if c.Log.Forward.Enabled {
+		fw := c.Log.Forward
+		if fw.Endpoint == "" {
+			return fmt.Errorf("log.forward.endpoint is required when forwarding is enabled")
+		}
+		if fw.APIKey == "" {
+			return fmt.Errorf("log.forward.api_key is required when forwarding is enabled (unresolved ${ENV}?)")
+		}
+		if fw.BatchSize <= 0 {
+			return fmt.Errorf("log.forward.batch_size must be > 0")
+		}
+		if fw.BufferSize <= 0 {
+			return fmt.Errorf("log.forward.buffer_size must be > 0")
+		}
+		if fw.FlushInterval <= 0 {
+			return fmt.Errorf("log.forward.flush_interval must be > 0")
+		}
+		if fw.Timeout <= 0 {
+			return fmt.Errorf("log.forward.timeout must be > 0")
 		}
 	}
 	return nil
