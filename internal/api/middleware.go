@@ -60,7 +60,7 @@ func (s *Server) logMiddleware(next http.Handler) http.Handler {
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
 		level := slog.LevelInfo
-		if isProbePath(r.URL.Path) {
+		if isQuietPath(r.URL.Path) {
 			level = slog.LevelDebug
 		}
 		s.log.Log(r.Context(), level, "request",
@@ -73,10 +73,13 @@ func (s *Server) logMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// isProbePath reports whether p is a health probe or metrics scrape endpoint —
-// automated, high-frequency traffic that is logged at debug rather than info.
-func isProbePath(p string) bool {
-	return p == "/healthz" || p == "/metrics"
+// isQuietPath reports whether p is high-frequency, low-signal traffic that is
+// logged at debug rather than info: health/metrics probes and the static admin
+// UI (its shell at "/" and assets under "/assets/"). Application API calls under
+// /api/ are never quiet.
+func isQuietPath(p string) bool {
+	return p == "/healthz" || p == "/metrics" ||
+		p == "/" || strings.HasPrefix(p, "/assets/")
 }
 
 // maxBodyMiddleware bounds the request body size for all endpoints.

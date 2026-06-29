@@ -91,6 +91,24 @@ func TestNormalRequestAccessLoggedAtInfo(t *testing.T) {
 	}
 }
 
+func TestUIPathsNotAccessLoggedAtInfo(t *testing.T) {
+	ts, buf := newServerWithLogger(t, slog.LevelInfo)
+
+	for _, p := range []string{"/", "/assets/app.js", "/assets/styles.css"} {
+		resp, err := http.Get(ts.URL + p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+	}
+
+	// Serving the dashboard shell and its static assets must not be access-logged
+	// at the default info level.
+	if strings.Contains(buf.String(), `"msg":"request"`) {
+		t.Errorf("UI shell/assets should not be access-logged at info; log:\n%s", buf.String())
+	}
+}
+
 func TestProbePathsAccessLoggedAtDebug(t *testing.T) {
 	ts, buf := newServerWithLogger(t, slog.LevelDebug)
 
