@@ -1,0 +1,19 @@
+# Binaries
+/omni-notify
+/bin/
+*.exe
+
+# Local database files
+*.db
+*.db-wal
+*.db-shm
+
+# Local config with real secrets
+/config.yaml
+
+# Test/coverage artifacts
+*.out
+coverage.*
+
+# Editor/OS
+.DS_Store

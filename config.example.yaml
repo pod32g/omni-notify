@@ -1,0 +1,94 @@
+# Omni-Notify example configuration.
+#
+# ${ENV} references are resolved from the process environment at load time, so
+# secrets and tokens stay out of this file. Required env for this example:
+#   OMNI_NOTIFY_API_TOKEN        bearer token clients must present
+#   OMNI_NOTIFY_ENCRYPTION_KEY   base64 32-byte key (run: omni-notify genkey)
+#   DISCORD_HOME_WEBHOOK         a Discord webhook URL
+#   SMTP_PASSWORD                SMTP password for the email provider
+
+server:
+  addr: ":8080"
+  max_body_bytes: 1048576       # 1 MiB
+  read_timeout: 15s
+  write_timeout: 15s
+
+security:
+  tokens:
+    - "${OMNI_NOTIFY_API_TOKEN}"
+  encryption_key: "${OMNI_NOTIFY_ENCRYPTION_KEY}"
+  metrics_require_auth: false
+  # When false (default, secure) provider URLs that resolve to private/loopback/
+  # link-local/multicast addresses are rejected. Set true for homelab setups that
+  # deliver to internal services.
+  allow_private_webhook_targets: false
+
+storage:
+  path: "./omni-notify.db"
+
+dedupe:
+  default_window: 5m            # stateless dedup window when a route sets none
+  default_repeat_interval: 0    # 0 = never re-notify an already-firing event
+
+delivery:
+  workers: 4
+  queue_size: 256
+  max_attempts: 5
+  backoff_base: 2s
+  backoff_factor: 2.0
+  backoff_max: 5m
+  send_timeout: 10s
+  poll_interval: 1s
+
+log:
+  level: info                   # debug|info|warn|error
+  format: text                  # text|json
+
+# Providers seeded into SQLite on boot (managed_by=config). Edit/extend at runtime
+# via POST /api/v1/providers (those are managed_by=api and never overwritten here).
+providers:
+  - name: discord-home
+    kind: discord
+    secret: "${DISCORD_HOME_WEBHOOK}"
+    config:
+      username: "Omni-Notify"
+
+  - name: email-main
+    kind: smtp
+    secret: "${SMTP_PASSWORD}"
+    config:
+      host: "smtp.example.com"
+      port: 587
+      tls: starttls
+      username: "alerts@example.com"
+      from: "alerts@example.com"
+      to:
+        - "ops@example.com"
+
+# Routes seeded into SQLite on boot. Match keys: type, source, severity, status,
+# and dotted labels.<k> / annotations.<k>. All conditions must match (exact).
+# Routes evaluate in priority order (higher first); ties broken by name. By
+# default every matching route applies; stop_processing halts strictly
+# lower-priority routes. A provider reached by several routes is delivered once.
+routes:
+  - name: critical-events
+    priority: 100               # evaluated before lower-priority routes
+    match:
+      severity: critical
+    providers:
+      - discord-home
+      - email-main
+    repeat_interval: 1h         # re-notify if still firing after an hour
+
+  - name: pihole
+    priority: 50
+    match:
+      labels.service: pihole
+    providers:
+      - discord-home
+    # stop_processing: true     # uncomment to skip strictly lower-priority routes
+
+  - name: catch-all
+    is_default: true            # only used when no other route matches
+    providers:
+      - discord-home
