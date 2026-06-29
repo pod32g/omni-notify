@@ -242,7 +242,7 @@ the `healthcheck` subcommand (no shell/curl needed).
 
 ```sh
 make docker        # build omni-notify:latest from the root Dockerfile
-make compose-up    # build + run via docker compose (publishes :8080)
+make compose-up    # build + run via docker compose (publishes host :8088 -> 8080)
 make compose-down
 ```
 
@@ -253,10 +253,12 @@ from the environment (or a gitignored `.env`):
 export OMNI_NOTIFY_API_TOKEN="$(openssl rand -hex 24)"
 export OMNI_NOTIFY_ENCRYPTION_KEY="$(go run ./cmd/omni-notify genkey)"
 docker compose up --build -d
-curl -fsS http://localhost:8080/healthz
+curl -fsS http://localhost:8088/healthz
 ```
 
-The SQLite database lives in the named volume `omni-notify-data` (mounted at
+Compose maps host port **8088 → container 8080** (the app listens on 8080 inside
+the container; the host port differs because 8080 is already taken on the deploy
+box). The SQLite database lives in the named volume `omni-notify-data` (mounted at
 `/data`), so it survives container recreates.
 
 ## CI/CD
@@ -270,7 +272,7 @@ runner** and mirrors the omni stack's pipeline:
   host: it rsyncs the checkout into `~/omni-notify`, snapshots the data volume to
   `backups/` (keeping the latest 10), recreates the container stop-first (so two
   processes never hold the SQLite WAL at once), waits for `healthcheck` readiness,
-  and runs an external smoke test on `:8080`.
+  and runs an external smoke test on the published host port (`:8088`).
 
 **Self-hosted runner setup:** register a GitHub Actions runner on the deploy host
 with the labels **`self-hosted`** and **`omni-notify`** (matching `runs-on`), with

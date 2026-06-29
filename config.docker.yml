@@ -14,7 +14,8 @@ security:
     - "${OMNI_NOTIFY_API_TOKEN}"
   encryption_key: "${OMNI_NOTIFY_ENCRYPTION_KEY}"
   metrics_require_auth: false
-  allow_private_webhook_targets: false
+  # true: allow delivery to private/LAN targets (homelab services on this subnet).
+  allow_private_webhook_targets: true
 
 storage:
   path: "/data/omni-notify.db"

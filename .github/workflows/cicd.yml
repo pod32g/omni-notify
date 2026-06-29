@@ -39,7 +39,7 @@ jobs:
         env:
           SVC: omni-notify
           VOL: omni-notify-data
-          PORT: "8080"
+          PORT: "8088"
           # Secrets reach the container via docker-compose's environment block.
           # Set both as repo secrets.
           OMNI_NOTIFY_API_TOKEN: ${{ secrets.OMNI_NOTIFY_API_TOKEN }}
