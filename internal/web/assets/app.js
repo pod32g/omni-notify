@@ -39,6 +39,9 @@
   }
 
   async function api(method, path, body) {
+    if (!token) {
+      throw new Error("Enter your bearer token in the top bar, then click Save.");
+    }
     const headers = {};
     if (token) headers["Authorization"] = "Bearer " + token;
     if (body !== undefined) headers["Content-Type"] = "application/json";
@@ -364,6 +367,12 @@
     $("#token").value = "";
     toast("token cleared");
   };
+  // Enter in the token field applies it (same as clicking Save).
+  $("#token").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); $("#token-save").click(); }
+  });
+  // No token yet: focus the field so it's obvious where to start.
+  if (!token) $("#token").focus();
 
   async function checkHealth() {
     const h = $("#health");

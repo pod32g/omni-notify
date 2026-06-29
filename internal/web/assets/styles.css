@@ -17,6 +17,11 @@
 
 * { box-sizing: border-box; }
 
+/* The `hidden` attribute must always win, even over class rules that set
+   `display` (e.g. .modal { display: flex }). Without this the modal overlay
+   shows as an empty box on load. */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   background: var(--bg);
