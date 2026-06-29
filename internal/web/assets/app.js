@@ -189,45 +189,199 @@
   const loaders = { events: loadEvents, states: loadStates, deliveries: loadDeliveries, providers: loadProviders, routes: loadRoutes, send: () => {} };
 
   // ---------------- provider form ----------------
+  // Per-kind schema: the secret's meaning and the config fields differ by kind,
+  // so the form renders typed inputs instead of a raw JSON blob. Field types:
+  // text (default), number, select (options), textarea, json (parsed object).
+  const PROVIDER_SCHEMA = {
+    discord: { secret: "Webhook URL", fields: [{ key: "username" }, { key: "avatar_url" }] },
+    slack: { secret: "Webhook URL", fields: [{ key: "username" }, { key: "icon_emoji" }] },
+    webhook: {
+      secret: "Target URL (or JSON {url,auth_header,auth_value})", fields: [
+        { key: "method", placeholder: "POST" },
+        { key: "content_type", placeholder: "application/json" },
+        { key: "headers", type: "json", placeholder: '{"Authorization":"Bearer …"}' },
+        { key: "template", type: "textarea", placeholder: "Go text/template; raw event JSON if blank" },
+      ],
+    },
+    smtp: {
+      secret: "Password", fields: [
+        { key: "host", required: true }, { key: "port", type: "number", placeholder: "587" },
+        { key: "username" }, { key: "from", required: true },
+        { key: "to", required: true, placeholder: "comma-separated" },
+        { key: "tls", type: "select", options: ["starttls", "tls", "none"] },
+        { key: "subject_template", type: "textarea" },
+      ],
+    },
+    telegram: {
+      secret: "Bot token", fields: [
+        { key: "chat_id", required: true },
+        { key: "parse_mode", type: "select", options: ["", "Markdown", "HTML"] },
+        { key: "api_base", advanced: true, placeholder: "https://api.telegram.org" },
+      ],
+    },
+    ntfy: {
+      secret: "Topic URL", secretPlaceholder: "https://ntfy.sh/your-topic", fields: [
+        { key: "priority", type: "number", placeholder: "1-5" },
+        { key: "tags", placeholder: "comma-separated" },
+        { key: "token", placeholder: "optional bearer token" },
+      ],
+    },
+    gotify: {
+      secret: "App token", fields: [
+        { key: "url", required: true, placeholder: "https://gotify.host" },
+        { key: "priority", type: "number", placeholder: "5" },
+      ],
+    },
+    pushover: {
+      secret: "API token", fields: [
+        { key: "user", required: true }, { key: "priority", type: "number" }, { key: "device" },
+      ],
+    },
+    teams: { secret: "Webhook URL", fields: [] },
+    matrix: {
+      secret: "Access token", fields: [
+        { key: "homeserver", required: true, placeholder: "https://matrix.org" },
+        { key: "room_id", required: true, placeholder: "!abc:matrix.org" },
+        { key: "msgtype", placeholder: "m.text" },
+      ],
+    },
+    pagerduty: {
+      secret: "Routing key", fields: [
+        { key: "source" }, { key: "events_url", advanced: true },
+      ],
+    },
+    opsgenie: { secret: "API key", fields: [{ key: "api_url", advanced: true }] },
+    googlechat: { secret: "Webhook URL", fields: [] },
+    twilio: {
+      secret: "Auth token", fields: [
+        { key: "account_sid", required: true },
+        { key: "from", required: true, placeholder: "+1…" },
+        { key: "to", required: true, placeholder: "+1…" },
+        { key: "api_base", advanced: true },
+      ],
+    },
+  };
+
   let providerMode = "create";
   const provForm = $("#provider-form");
+  const fieldsBox = $("#provider-fields");
   $("#provider-new").onclick = () => openProvider(null);
   $("#provider-cancel").onclick = () => { provForm.hidden = true; };
+  provForm.kind.addEventListener("change", () => {
+    provForm._origConfig = {}; // switching kind discards the old kind's config
+    renderProviderFields(provForm.kind.value, {});
+  });
+
+  // renderProviderFields builds typed inputs for a kind, populated from config.
+  function renderProviderFields(kind, config) {
+    config = config || {};
+    const schema = PROVIDER_SCHEMA[kind] || { secret: "Secret", fields: [] };
+    // Secret label + placeholder reflect this kind's meaning.
+    $("#provider-secret-label").textContent = "Secret — " + schema.secret;
+    provForm.secret.placeholder = providerMode === "edit"
+      ? "(leave blank to keep existing)"
+      : (schema.secretPlaceholder || schema.secret);
+
+    fieldsBox.textContent = "";
+    const advanced = [];
+    schema.fields.forEach((f) => {
+      const wrap = el("label");
+      wrap.append(el("span", f.label || f.key + (f.required ? " *" : "")));
+      let input;
+      if (f.type === "select") {
+        input = el("select");
+        (f.options || []).forEach((o) => {
+          const opt = el("option", o === "" ? "(none)" : o);
+          opt.value = o;
+          input.append(opt);
+        });
+      } else if (f.type === "textarea" || f.type === "json") {
+        input = el("textarea");
+        input.rows = f.type === "json" ? 3 : 4;
+        input.spellcheck = false;
+      } else {
+        input = el("input");
+        input.type = f.type === "number" ? "number" : "text";
+      }
+      input.dataset.key = f.key;
+      input.dataset.ftype = f.type || "text";
+      if (f.placeholder) input.placeholder = f.placeholder;
+      // Populate from existing config.
+      const v = config[f.key];
+      if (v !== undefined && v !== null) {
+        input.value = f.type === "json" ? JSON.stringify(v) : String(v);
+      }
+      wrap.append(input);
+      if (f.advanced) advanced.push(wrap); else fieldsBox.append(wrap);
+    });
+    if (advanced.length) {
+      const details = el("details");
+      details.append(el("summary", "Advanced"));
+      advanced.forEach((w) => details.append(w));
+      fieldsBox.append(details);
+    }
+  }
+
+  // readProviderConfig builds the config object from the rendered fields. With
+  // PUT-replace semantics the form is authoritative: a filled field sets its key,
+  // an empty one removes it. Unknown keys on the original (not in the schema) are
+  // preserved so editing never silently drops them.
+  function readProviderConfig(original) {
+    const cfg = {};
+    Object.keys(original || {}).forEach((k) => { cfg[k] = original[k]; });
+    let bad = null;
+    $$("#provider-fields [data-key]").forEach((input) => {
+      const key = input.dataset.key, type = input.dataset.ftype;
+      const raw = input.value.trim();
+      if (raw === "") { delete cfg[key]; return; }
+      if (type === "number") {
+        const n = Number(raw);
+        if (Number.isNaN(n)) { bad = key; return; }
+        cfg[key] = n;
+      } else if (type === "json") {
+        try { cfg[key] = JSON.parse(raw); }
+        catch { bad = key; }
+      } else {
+        cfg[key] = raw;
+      }
+    });
+    if (bad) throw new Error(`invalid value for "${bad}"`);
+    return cfg;
+  }
 
   function openProvider(p) {
     providerMode = p ? "edit" : "create";
     provForm.hidden = false;
     provForm.reset();
     provForm.name.readOnly = !!p;
+    provForm.kind.value = p ? p.kind : "discord";
     $("#provider-form-title").textContent = p ? "Edit provider: " + p.name : "New provider";
     $("#provider-submit").textContent = p ? "Save changes" : "Create";
     $("#provider-test").hidden = !p;
     if (p) {
       provForm.name.value = p.name;
-      provForm.kind.value = p.kind;
-      provForm.config.value = p.config ? JSON.stringify(p.config, null, 2) : "";
       provForm.enabled.checked = !!p.enabled;
       provForm.secret.value = "";
     }
+    // Remember the original config so edits preserve any keys not in the schema.
+    provForm._origConfig = p && p.config ? p.config : {};
+    renderProviderFields(provForm.kind.value, provForm._origConfig);
   }
 
   provForm.onsubmit = guard(async (e) => {
     e.preventDefault();
-    const payload = { enabled: provForm.enabled.checked };
-    const cfgRaw = provForm.config.value.trim();
-    if (cfgRaw) {
-      try { payload.config = JSON.parse(cfgRaw); }
-      catch { return toast("config must be valid JSON", "err"); }
-    }
+    let config;
+    try { config = readProviderConfig(provForm._origConfig); }
+    catch (err) { return toast(err.message, "err"); }
+    const payload = { enabled: provForm.enabled.checked, kind: provForm.kind.value, config };
     if (provForm.secret.value) payload.secret = provForm.secret.value;
-    payload.kind = provForm.kind.value;
     if (providerMode === "create") {
       payload.name = provForm.name.value.trim();
       await api("POST", "/api/v1/providers", payload);
       toast("provider created", "ok");
     } else {
-      // PUT (replace): the form shows the full config, so saving makes it
-      // authoritative — cleared keys are removed. Secret is preserved when blank.
+      // PUT (replace): the form is authoritative — cleared fields are removed.
+      // Secret is preserved when blank.
       await api("PUT", "/api/v1/providers/" + encodeURIComponent(provForm.name.value), payload);
       toast("provider updated", "ok");
     }

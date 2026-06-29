@@ -98,10 +98,8 @@
               <option value="twilio">twilio</option>
             </select>
           </label>
-          <label>Secret <input name="secret" type="password" placeholder="(leave blank to keep existing)"></label>
-          <label>Config (JSON)
-            <textarea name="config" rows="6" spellcheck="false" placeholder='{"username":"Omni-Notify"}'></textarea>
-          </label>
+          <label><span id="provider-secret-label">Secret</span> <input name="secret" type="password" placeholder="(leave blank to keep existing)"></label>
+          <div id="provider-fields"></div>
           <label class="row"><input type="checkbox" name="enabled" checked> enabled</label>
           <div class="form-actions">
             <button type="submit" class="btn btn-primary" id="provider-submit">Create</button>

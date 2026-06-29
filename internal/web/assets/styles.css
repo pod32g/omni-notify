@@ -123,6 +123,8 @@ td.wrap { white-space: normal; max-width: 360px; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
 .form-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
 .hint { color: var(--muted); font-size: 12px; margin: 12px 0 0; }
+.form-col details { margin: 0 0 10px; }
+.form-col summary { color: var(--muted); cursor: pointer; font-size: 13px; margin-bottom: 8px; }
 .result { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-top: 12px; overflow-x: auto; }
 
 /* Toast */
