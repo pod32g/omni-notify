@@ -2,6 +2,7 @@ package api
 
 import (
 	"crypto/subtle"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -48,14 +49,21 @@ func (r *statusRecorder) WriteHeader(code int) {
 	r.ResponseWriter.WriteHeader(code)
 }
 
-// logMiddleware logs each request at debug/info level. It never logs the
-// Authorization header or request bodies, keeping credentials out of logs.
+// logMiddleware logs each request. It never logs the Authorization header or
+// request bodies, keeping credentials out of logs. Health probes and metrics
+// scrapes are high-frequency infrastructure traffic, so they log at debug (and
+// are suppressed at the default info level) to keep real requests visible and
+// avoid flooding a log aggregator.
 func (s *Server) logMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
-		s.log.Info("request",
+		level := slog.LevelInfo
+		if isProbePath(r.URL.Path) {
+			level = slog.LevelDebug
+		}
+		s.log.Log(r.Context(), level, "request",
 			"method", r.Method,
 			"path", r.URL.Path,
 			"status", rec.status,
@@ -63,6 +71,12 @@ func (s *Server) logMiddleware(next http.Handler) http.Handler {
 			"remote", clientIP(r),
 		)
 	})
+}
+
+// isProbePath reports whether p is a health probe or metrics scrape endpoint —
+// automated, high-frequency traffic that is logged at debug rather than info.
+func isProbePath(p string) bool {
+	return p == "/healthz" || p == "/metrics"
 }
 
 // maxBodyMiddleware bounds the request body size for all endpoints.
