@@ -1,0 +1,36 @@
+# Container configuration mounted into the image at /etc/omni-notify/config.yml.
+# ${ENV} values are resolved at load time from the container environment (set via
+# docker-compose's environment block / CI secrets), so no secrets live in git.
+#
+# Providers and routes are managed at runtime through the REST API; none are
+# seeded here.
+
+server:
+  addr: ":8080"
+  max_body_bytes: 1048576
+
+security:
+  tokens:
+    - "${OMNI_NOTIFY_API_TOKEN}"
+  encryption_key: "${OMNI_NOTIFY_ENCRYPTION_KEY}"
+  metrics_require_auth: false
+  allow_private_webhook_targets: false
+
+storage:
+  path: "/data/omni-notify.db"
+
+dedupe:
+  default_window: 5m
+  default_repeat_interval: 0
+
+delivery:
+  workers: 4
+  max_attempts: 5
+  backoff_base: 2s
+  backoff_factor: 2.0
+  backoff_max: 5m
+  send_timeout: 10s
+
+log:
+  level: info
+  format: json

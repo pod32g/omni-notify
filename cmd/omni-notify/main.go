@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -26,6 +27,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+// version is set at build time via -ldflags "-X main.version=...".
+var version = "dev"
+
 func main() {
 	// Subcommand: generate an encryption key and exit.
 	if len(os.Args) > 1 && os.Args[1] == "genkey" {
@@ -34,6 +38,12 @@ func main() {
 			os.Exit(1)
 		}
 		return
+	}
+
+	// Subcommand: health probe. Lets the distroless container self-check without
+	// a shell or curl (used by the Docker healthcheck and CI deploy readiness).
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		os.Exit(runHealthcheck(os.Args[2:]))
 	}
 
 	configPath := flag.String("config", envOr("OMNI_NOTIFY_CONFIG", "config.yaml"), "path to config file")
@@ -52,6 +62,7 @@ func run(configPath string) error {
 	}
 	log := newLogger(cfg.Log)
 	slog.SetDefault(log)
+	log.Info("starting omni-notify", "version", version)
 
 	// Resolve encryption key (config value wins; falls back to env).
 	keyB64 := cfg.Security.EncryptionKey
@@ -192,6 +203,36 @@ func toRouteModels(seeds []config.RouteSeed) []models.Route {
 		out = append(out, s.ToModel())
 	}
 	return out
+}
+
+// runHealthcheck performs a one-shot GET against url and returns a process exit
+// code: 0 if the response is 2xx, 1 otherwise. It has no external dependencies
+// so it works inside a distroless image.
+func runHealthcheck(args []string) int {
+	fs := flag.NewFlagSet("healthcheck", flag.ContinueOnError)
+	url := fs.String("url", "http://localhost:8080/healthz", "health endpoint URL")
+	timeout := fs.Duration("timeout", 5*time.Second, "request timeout")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, *url, nil)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "healthcheck:", err)
+		return 1
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "healthcheck:", err)
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		fmt.Fprintf(os.Stderr, "healthcheck: unhealthy status %d\n", resp.StatusCode)
+		return 1
+	}
+	return 0
 }
 
 func printGenKey() error {

@@ -1,0 +1,14 @@
+# Keep the build context lean and reproducible.
+.git
+.github
+.claude
+data
+backups
+*.db
+*.db-wal
+*.db-shm
+omni-notify
+*.test
+docs
+*.md
+!README.md

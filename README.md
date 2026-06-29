@@ -237,9 +237,49 @@ make all      # fmt + vet + test + build
 
 ## Deployment
 
+The image is a CGO-free, distroless static build. The container self-probes via
+the `healthcheck` subcommand (no shell/curl needed).
+
 ```sh
-make docker   # builds omni-notify:latest from deploy/Dockerfile (CGO-free, distroless)
+make docker        # build omni-notify:latest from the root Dockerfile
+make compose-up    # build + run via docker compose (publishes :8080)
+make compose-down
 ```
+
+Compose mounts [`config.docker.yml`](config.docker.yml) and reads two secrets
+from the environment (or a gitignored `.env`):
+
+```sh
+export OMNI_NOTIFY_API_TOKEN="$(openssl rand -hex 24)"
+export OMNI_NOTIFY_ENCRYPTION_KEY="$(go run ./cmd/omni-notify genkey)"
+docker compose up --build -d
+curl -fsS http://localhost:8080/healthz
+```
+
+The SQLite database lives in the named volume `omni-notify-data` (mounted at
+`/data`), so it survives container recreates.
+
+## CI/CD
+
+[`.github/workflows/cicd.yml`](.github/workflows/cicd.yml) runs on a **self-hosted
+runner** and mirrors the omni stack's pipeline:
+
+- **build** (every push / same-repo PR) — `go test ./...` then `docker compose
+  build` as a gate. Fork PRs are never built on the self-hosted runner.
+- **deploy** (push to `main` only, serialized) — the runner sits on the target
+  host: it rsyncs the checkout into `~/omni-notify`, snapshots the data volume to
+  `backups/` (keeping the latest 10), recreates the container stop-first (so two
+  processes never hold the SQLite WAL at once), waits for `healthcheck` readiness,
+  and runs an external smoke test on `:8080`.
+
+**Self-hosted runner setup:** register a GitHub Actions runner on the deploy host
+with the labels **`self-hosted`** and **`omni-notify`** (matching `runs-on`), with
+Docker available to the runner user. Then add two repository secrets:
+
+| Secret | Purpose |
+|--------|---------|
+| `OMNI_NOTIFY_API_TOKEN`      | bearer token the deployed API accepts |
+| `OMNI_NOTIFY_ENCRYPTION_KEY` | base64 32-byte key (`omni-notify genkey`) for secret encryption |
 
 ## License
 

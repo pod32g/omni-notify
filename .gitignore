@@ -11,6 +11,11 @@
 # Local config with real secrets
 /config.yaml
 
+# Local docker / deploy artifacts (data lives in a named volume; backups on host)
+/data/
+/backups/
+/.env
+
 # Test/coverage artifacts
 *.out
 coverage.*

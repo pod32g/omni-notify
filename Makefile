@@ -1,7 +1,7 @@
 BINARY := omni-notify
 PKG    := ./...
 
-.PHONY: all build run test vet fmt fmt-check tidy clean cover docker
+.PHONY: all build run test vet fmt fmt-check tidy clean cover docker compose-up compose-down
 
 all: fmt vet test build
 
@@ -37,4 +37,10 @@ clean:
 	rm -f $(BINARY) coverage.out *.db *.db-wal *.db-shm
 
 docker:
-	docker build -t omni-notify:latest -f deploy/Dockerfile .
+	docker build -t omni-notify:latest .
+
+compose-up:
+	docker compose up --build -d
+
+compose-down:
+	docker compose down
