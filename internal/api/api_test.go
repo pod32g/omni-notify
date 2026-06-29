@@ -96,6 +96,43 @@ func TestAuthRequired(t *testing.T) {
 	}
 }
 
+func TestUIServedWithoutAuth(t *testing.T) {
+	ts, _ := newTestServer(t, 1<<20)
+	// Shell at "/" is public and HTML.
+	resp, body := do(t, ts, http.MethodGet, "/", "", false)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET / = %d, want 200", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Fatalf("GET / content-type = %q", ct)
+	}
+	if !strings.Contains(string(body), "<title>Omni-Notify</title>") {
+		t.Fatalf("index.html not served: %s", string(body)[:min(120, len(body))])
+	}
+	// Security headers present on the unauthenticated UI surface.
+	for h, want := range map[string]string{
+		"X-Content-Type-Options": "nosniff",
+		"X-Frame-Options":        "DENY",
+	} {
+		if got := resp.Header.Get(h); got != want {
+			t.Errorf("%s = %q, want %q", h, got, want)
+		}
+	}
+	if !strings.Contains(resp.Header.Get("Content-Security-Policy"), "default-src 'self'") {
+		t.Errorf("missing CSP, got %q", resp.Header.Get("Content-Security-Policy"))
+	}
+	// Static assets are public too.
+	for _, a := range []string{"/assets/app.js", "/assets/styles.css"} {
+		if resp, _ := do(t, ts, http.MethodGet, a, "", false); resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s = %d, want 200", a, resp.StatusCode)
+		}
+	}
+	// The API itself is still gated.
+	if resp, _ := do(t, ts, http.MethodGet, "/api/v1/events", "", false); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("API without auth = %d, want 401", resp.StatusCode)
+	}
+}
+
 func TestHealthAndMetricsNoAuth(t *testing.T) {
 	ts, _ := newTestServer(t, 1<<20)
 	if resp, _ := do(t, ts, http.MethodGet, "/healthz", "", false); resp.StatusCode != http.StatusOK {

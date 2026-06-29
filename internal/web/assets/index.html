@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Omni-Notify</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">◎</span>
+      <span>Omni-Notify</span>
+      <span id="health" class="health" title="API health">●</span>
+    </div>
+    <div class="token">
+      <input id="token" type="password" placeholder="Bearer token" autocomplete="off" spellcheck="false">
+      <button id="token-save" class="btn">Save</button>
+      <button id="token-clear" class="btn btn-ghost">Clear</button>
+    </div>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-tab="events">Events</button>
+    <button class="tab" data-tab="states">States</button>
+    <button class="tab" data-tab="deliveries">Deliveries</button>
+    <button class="tab" data-tab="providers">Providers</button>
+    <button class="tab" data-tab="routes">Routes</button>
+    <button class="tab" data-tab="send">Send event</button>
+  </nav>
+
+  <main>
+    <!-- EVENTS -->
+    <section id="tab-events" class="panel active">
+      <div class="toolbar">
+        <input data-filter="source" placeholder="source">
+        <input data-filter="type" placeholder="type">
+        <input data-filter="severity" placeholder="severity">
+        <input data-filter="status" placeholder="status">
+        <input data-filter="fingerprint" placeholder="fingerprint">
+        <input data-filter="limit" placeholder="limit" type="number" value="50">
+        <button class="btn" id="events-refresh">Refresh</button>
+        <label class="auto"><input type="checkbox" id="events-auto"> auto</label>
+      </div>
+      <div class="table-wrap"><table id="events-table"></table></div>
+    </section>
+
+    <!-- STATES -->
+    <section id="tab-states" class="panel">
+      <div class="toolbar">
+        <label class="auto"><input type="checkbox" id="states-active"> active only</label>
+        <button class="btn" id="states-refresh">Refresh</button>
+        <label class="auto"><input type="checkbox" id="states-auto"> auto</label>
+      </div>
+      <div class="table-wrap"><table id="states-table"></table></div>
+    </section>
+
+    <!-- DELIVERIES -->
+    <section id="tab-deliveries" class="panel">
+      <div class="toolbar">
+        <input data-dfilter="fingerprint" placeholder="fingerprint">
+        <input data-dfilter="status" placeholder="status (pending|success|failed|dead)">
+        <input data-dfilter="limit" placeholder="limit" type="number" value="50">
+        <button class="btn" id="deliveries-refresh">Refresh</button>
+        <label class="auto"><input type="checkbox" id="deliveries-auto"> auto</label>
+      </div>
+      <div class="table-wrap"><table id="deliveries-table"></table></div>
+    </section>
+
+    <!-- PROVIDERS -->
+    <section id="tab-providers" class="panel">
+      <div class="split">
+        <div class="list-col">
+          <div class="toolbar">
+            <button class="btn" id="providers-refresh">Refresh</button>
+            <button class="btn btn-primary" id="provider-new">New provider</button>
+          </div>
+          <div class="table-wrap"><table id="providers-table"></table></div>
+        </div>
+        <form class="form-col" id="provider-form" hidden>
+          <h3 id="provider-form-title">New provider</h3>
+          <label>Name <input name="name" required></label>
+          <label>Kind
+            <select name="kind">
+              <option value="discord">discord</option>
+              <option value="slack">slack</option>
+              <option value="webhook">webhook</option>
+              <option value="smtp">smtp</option>
+            </select>
+          </label>
+          <label>Secret <input name="secret" type="password" placeholder="(leave blank to keep existing)"></label>
+          <label>Config (JSON)
+            <textarea name="config" rows="6" spellcheck="false" placeholder='{"username":"Omni-Notify"}'></textarea>
+          </label>
+          <label class="row"><input type="checkbox" name="enabled" checked> enabled</label>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary" id="provider-submit">Create</button>
+            <button type="button" class="btn" id="provider-test" hidden>Send test</button>
+            <button type="button" class="btn btn-ghost" id="provider-cancel">Cancel</button>
+          </div>
+          <p class="hint">Saving replaces the provider with these values (cleared config keys are removed). The secret changes only when you type a new one — leave blank to keep the stored one.</p>
+        </form>
+      </div>
+    </section>
+
+    <!-- ROUTES -->
+    <section id="tab-routes" class="panel">
+      <div class="split">
+        <div class="list-col">
+          <div class="toolbar">
+            <button class="btn" id="routes-refresh">Refresh</button>
+            <button class="btn btn-primary" id="route-new">New route</button>
+          </div>
+          <div class="table-wrap"><table id="routes-table"></table></div>
+        </div>
+        <form class="form-col" id="route-form" hidden>
+          <h3 id="route-form-title">New route</h3>
+          <label>Name <input name="name" required></label>
+          <label>Match (JSON)
+            <textarea name="match" rows="4" spellcheck="false" placeholder='{"severity":"critical","labels.service":"pihole"}'></textarea>
+          </label>
+          <label>Providers (comma-separated) <input name="providers" placeholder="discord-home, email-main"></label>
+          <div class="grid2">
+            <label>Priority <input name="priority" type="number" value="0"></label>
+            <label>Dedup window <input name="dedup_window" placeholder="5m / 0 / -1s"></label>
+            <label>Repeat interval <input name="repeat_interval" placeholder="1h / 0"></label>
+            <label class="row"><input type="checkbox" name="is_default"> default</label>
+            <label class="row"><input type="checkbox" name="stop_processing"> stop_processing</label>
+            <label class="row"><input type="checkbox" name="disabled"> disabled</label>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary" id="route-submit">Create</button>
+            <button type="button" class="btn btn-ghost" id="route-cancel">Cancel</button>
+          </div>
+          <p class="hint">Dedup window/interval: <code>0</code> inherits the default, a negative value disables it.</p>
+        </form>
+      </div>
+    </section>
+
+    <!-- SEND EVENT -->
+    <section id="tab-send" class="panel">
+      <form class="form-col wide" id="event-form">
+        <h3>Send an event</h3>
+        <div class="grid2">
+          <label>event_id <input name="event_id" value="manual-test" required></label>
+          <label>type <input name="type" value="alert" required></label>
+          <label>source <input name="source" value="web-ui" required></label>
+          <label>title <input name="title" value="Test event" required></label>
+          <label>status
+            <select name="status">
+              <option value="">(none / stateless)</option>
+              <option value="firing">firing</option>
+              <option value="resolved">resolved</option>
+            </select>
+          </label>
+          <label>severity
+            <select name="severity">
+              <option value="">(none)</option>
+              <option value="critical">critical</option>
+              <option value="error">error</option>
+              <option value="warning">warning</option>
+              <option value="info">info</option>
+              <option value="debug">debug</option>
+            </select>
+          </label>
+        </div>
+        <label>summary <input name="summary"></label>
+        <label>labels (JSON) <textarea name="labels" rows="3" spellcheck="false" placeholder='{"service":"pihole"}'></textarea></label>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Send</button>
+        </div>
+        <pre id="event-result" class="result" hidden></pre>
+      </form>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+  <div id="modal" class="modal" hidden><pre id="modal-body"></pre><button class="btn" id="modal-close">Close</button></div>
+
+  <script src="/assets/app.js"></script>
+</body>
+</html>

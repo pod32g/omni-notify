@@ -8,6 +8,22 @@ import (
 	"time"
 )
 
+// securityHeaders sets conservative response headers. The admin UI is an
+// unauthenticated shell that drives privileged API calls with a stored token, so
+// it gets defense-in-depth: a self-only CSP (assets use no inline script/style),
+// no framing (clickjacking), and no MIME sniffing. Harmless for API/JSON too.
+func (s *Server) securityHeaders(next http.Handler) http.Handler {
+	const csp = "default-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy", csp)
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
+		next.ServeHTTP(w, r)
+	})
+}
+
 // recoverMiddleware converts panics into 500s instead of crashing the server.
 func (s *Server) recoverMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -76,9 +92,11 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// isExempt reports whether a path bypasses authentication.
+// isExempt reports whether a path bypasses authentication. The UI shell ("/" and
+// its static assets) and /healthz are always open; the JS calls the authenticated
+// API with a bearer token. /metrics is open unless configured otherwise.
 func (s *Server) isExempt(path string) bool {
-	if path == "/healthz" {
+	if path == "/healthz" || path == "/" || strings.HasPrefix(path, "/assets/") {
 		return true
 	}
 	if path == "/metrics" && !s.cfg.MetricsRequireAuth {

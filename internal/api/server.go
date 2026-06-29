@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/pod32g/omni-notify/internal/notifier"
 	"github.com/pod32g/omni-notify/internal/providers"
 	"github.com/pod32g/omni-notify/internal/storage"
+	"github.com/pod32g/omni-notify/internal/web"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -77,6 +79,20 @@ func NewServer(
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
+	// Embedded admin UI: the shell at "/" and static assets under "/assets/".
+	// Both are served unauthenticated; the JS calls the API with a bearer token.
+	uiFS := web.Assets()
+	mux.Handle("GET /assets/", http.StripPrefix("/assets/", http.FileServer(http.FS(uiFS))))
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		b, err := fs.ReadFile(uiFS, "index.html")
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "ui unavailable")
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(b)
+	})
+
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.Handle("GET /metrics", promhttp.HandlerFor(s.promReg, promhttp.HandlerOpts{}))
 
@@ -106,6 +122,7 @@ func (s *Server) Handler() http.Handler {
 	var h http.Handler = mux
 	h = s.authMiddleware(h)
 	h = s.maxBodyMiddleware(h)
+	h = s.securityHeaders(h)
 	h = s.logMiddleware(h)
 	h = s.recoverMiddleware(h)
 	return h

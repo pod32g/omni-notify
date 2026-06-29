@@ -25,6 +25,8 @@ or contain business logic. It is a router and delivery engine.
   webhook targets, **secrets encrypted at rest** (AES-256-GCM) and masked on the API
 - Prometheus metrics and a `/healthz` endpoint
 - REST API with `POST` (create) / `PUT` (replace) / `PATCH` (partial) semantics
+- **Embedded web UI** (served at `/`) for events, states, deliveries, and full
+  provider/route management
 - Hybrid config: a YAML file seeds providers/routes at boot; the REST API does
   runtime CRUD; **SQLite is the source of truth**
 
@@ -154,10 +156,26 @@ Match keys: `type`, `source`, `severity`, `status`, and dotted `labels.<k>` /
 `annotations.<k>`; all conditions must match exactly. A provider reached through
 several matching routes receives exactly **one** delivery per event.
 
+## Web UI
+
+A self-contained admin UI (no build step, embedded in the binary) is served at
+`http://<host>:<port>/`:
+
+- **Events / States / Deliveries** — filterable tables with auto-refresh; click a
+  row for the full JSON.
+- **Providers / Routes** — create, replace, and partially edit from the browser,
+  plus a per-provider **Send test** button.
+- **Send event** — post a sample event to exercise routing and dedup.
+
+The UI shell and its `/assets/*` are served unauthenticated; the page calls the
+authenticated API with a **bearer token you paste into the top bar** (kept in the
+browser's `localStorage`). Enter your `OMNI_NOTIFY_API_TOKEN` to load data.
+
 ## REST API
 
 All `/api/v1/*` endpoints require `Authorization: Bearer <token>`.
-`/healthz` is always open; `/metrics` is open unless `metrics_require_auth: true`.
+`/healthz` and the UI (`/`, `/assets/*`) are always open; `/metrics` is open
+unless `metrics_require_auth: true`.
 
 | Method | Path                              | Purpose                              |
 |--------|-----------------------------------|--------------------------------------|
