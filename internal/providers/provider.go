@@ -93,5 +93,35 @@ func NewDefault(httpClient *http.Client, allowPrivate bool) *Registry {
 	r.Register("smtp", func(cfg map[string]any, secret string) (Provider, error) {
 		return newSMTP(cfg, secret)
 	})
+	r.Register("telegram", func(cfg map[string]any, secret string) (Provider, error) {
+		return newTelegram(httpClient, cfg, secret, allowPrivate)
+	})
+	r.Register("ntfy", func(cfg map[string]any, secret string) (Provider, error) {
+		return newNtfy(httpClient, cfg, secret, allowPrivate)
+	})
+	r.Register("gotify", func(cfg map[string]any, secret string) (Provider, error) {
+		return newGotify(httpClient, cfg, secret, allowPrivate)
+	})
+	r.Register("pushover", func(cfg map[string]any, secret string) (Provider, error) {
+		return newPushover(httpClient, cfg, secret, allowPrivate)
+	})
+	r.Register("teams", func(cfg map[string]any, secret string) (Provider, error) {
+		return newTeams(httpClient, cfg, secret, allowPrivate)
+	})
+	r.Register("matrix", func(cfg map[string]any, secret string) (Provider, error) {
+		return newMatrix(httpClient, cfg, secret, allowPrivate)
+	})
+	r.Register("pagerduty", func(cfg map[string]any, secret string) (Provider, error) {
+		return newPagerDuty(httpClient, cfg, secret, allowPrivate)
+	})
+	r.Register("opsgenie", func(cfg map[string]any, secret string) (Provider, error) {
+		return newOpsgenie(httpClient, cfg, secret, allowPrivate)
+	})
+	r.Register("googlechat", func(cfg map[string]any, secret string) (Provider, error) {
+		return newGoogleChat(httpClient, cfg, secret, allowPrivate)
+	})
+	r.Register("twilio", func(cfg map[string]any, secret string) (Provider, error) {
+		return newTwilio(httpClient, cfg, secret, allowPrivate)
+	})
 	return r
 }

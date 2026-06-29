@@ -292,7 +292,11 @@ func TestWebhookSecretJSONValidation(t *testing.T) {
 
 func TestRegistryDefault(t *testing.T) {
 	r := NewDefault(nil, true)
-	for _, kind := range []string{"discord", "slack", "webhook", "smtp"} {
+	for _, kind := range []string{
+		"discord", "slack", "webhook", "smtp",
+		"telegram", "ntfy", "gotify", "pushover", "teams",
+		"matrix", "pagerduty", "opsgenie", "googlechat", "twilio",
+	} {
 		if !r.Has(kind) {
 			t.Errorf("missing default provider kind %q", kind)
 		}

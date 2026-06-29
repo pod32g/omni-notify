@@ -201,16 +201,35 @@ unless `metrics_require_auth: true`.
 
 ## Providers
 
-| Kind      | Secret           | Key config                                          |
-|-----------|------------------|-----------------------------------------------------|
-| `discord` | webhook URL      | `username`, `avatar_url`                             |
-| `slack`   | webhook URL      | `username`, `icon_emoji`                             |
-| `webhook` | target URL¹      | `method`, `content_type`, `headers`, `template`     |
-| `smtp`    | password         | `host`, `port`, `username`, `from`, `to[]`, `tls`, `subject_template` |
+| Kind         | Secret            | Key config                                          |
+|--------------|-------------------|-----------------------------------------------------|
+| `discord`    | webhook URL       | `username`, `avatar_url`                            |
+| `slack`      | webhook URL       | `username`, `icon_emoji`                            |
+| `webhook`    | target URL¹       | `method`, `content_type`, `headers`, `template`     |
+| `smtp`       | password          | `host`, `port`, `username`, `from`, `to[]`, `tls`, `subject_template` |
+| `telegram`   | bot token         | `chat_id` (req), `parse_mode`                       |
+| `ntfy`       | topic URL         | `priority`, `tags`, `token`                         |
+| `gotify`     | app token         | `url` (req, server base), `priority`                |
+| `pushover`   | API token         | `user` (req), `priority`, `device`                  |
+| `teams`      | webhook URL       | —                                                   |
+| `matrix`     | access token      | `homeserver` (req), `room_id` (req), `msgtype`      |
+| `pagerduty`  | routing key       | `source` (firing→trigger, resolved→resolve)         |
+| `opsgenie`   | API key           | — (firing→create, resolved→close, keyed by fingerprint) |
+| `googlechat` | webhook URL       | —                                                   |
+| `twilio`     | auth token        | `account_sid` (req), `from` (req), `to` (req)       |
+
+Providers that talk to a fixed SaaS endpoint also accept an override config key
+(`api_base` / `api_url` / `events_url`) — handy for self-hosted/proxied instances.
 
 Add a provider via the API (secret is encrypted before storage):
 
 ```sh
+# Telegram
+curl -X POST http://localhost:8080/api/v1/providers \
+  -H "Authorization: Bearer $OMNI_NOTIFY_API_TOKEN" \
+  -d '{"name":"tg-home","kind":"telegram","secret":"<bot-token>","config":{"chat_id":"123456789"}}'
+
+# Slack
 curl -X POST http://localhost:8080/api/v1/providers \
   -H "Authorization: Bearer $OMNI_NOTIFY_API_TOKEN" \
   -d '{"name":"ops-slack","kind":"slack","secret":"https://hooks.slack.com/…"}'
