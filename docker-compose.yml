@@ -20,6 +20,12 @@ services:
       # log.forward.api_key). Must match an OMNILOG_INGEST_KEYS value on the
       # omni-logging side. Secret → host .env / CI secret.
       OMNI_LOGGING_API_KEY: ${OMNI_LOGGING_API_KEY:-}
+      # Route plain-HTTP egress (logship to omnilog) through the netviz-sidecar's
+      # forward proxy so Omni-NetViz sees the outbound edge. HTTP only (no
+      # HTTPS_PROXY), so HTTPS notification providers (Discord/Slack/…) stay direct
+      # and are unaffected by the app's SSRF guard; localhost excluded.
+      HTTP_PROXY: "${HTTP_PROXY:-http://netviz-sidecar:13128}"
+      NO_PROXY: "${NO_PROXY:-localhost,127.0.0.1,omni-notify}"
     # HTTP is fronted by the netviz-sidecar (below): expose internally instead of
     # publishing. The sidecar takes over host port 8088.
     expose:
@@ -55,6 +61,7 @@ services:
       - "-docker-network=omni-notify_default"
       - "-listen=:8088"
       - "-upstream=http://omni-notify:8080"
+      - "-proxy-listen=:13128"
       - "-flush-interval=10s"
     environment:
       NETVIZ_URL: "${NETVIZ_URL:-http://192.168.68.34:8099}"
