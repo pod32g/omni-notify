@@ -20,9 +20,10 @@ services:
       # log.forward.api_key). Must match an OMNILOG_INGEST_KEYS value on the
       # omni-logging side. Secret → host .env / CI secret.
       OMNI_LOGGING_API_KEY: ${OMNI_LOGGING_API_KEY:-}
-    ports:
-      # host 8088 -> container 8080 (host 8080 is taken by omnilog on the box).
-      - "8088:8080"
+    # HTTP is fronted by the netviz-sidecar (below): expose internally instead of
+    # publishing. The sidecar takes over host port 8088.
+    expose:
+      - "8080"
     volumes:
       - omni-notify-data:/data
       - ./config.docker.yml:/etc/omni-notify/config.yml:ro
@@ -33,6 +34,38 @@ services:
       timeout: 3s
       retries: 5
       start_period: 5s
+
+  # --- Omni-NetViz observability sidecar ---
+  # Fronts omni-notify's published port (8088) and reverse-proxies to the app on
+  # the internal network, reporting inbound traffic metadata to Omni-NetViz.
+  # Metadata only — never bodies or credentials; talks only to Omni-NetViz.
+  # Requires the netviz-sidecar:local image on the deploy host (built from
+  # github.com/pod32g/omni-netviz Dockerfile.sidecar).
+  netviz-sidecar:
+    image: netviz-sidecar:local
+    container_name: omni-notify-netviz
+    restart: unless-stopped
+    depends_on:
+      - omni-notify
+    command:
+      - "-service=omni-notify"
+      - "-host=chizu"
+      - "-namespace=omni-notify"
+      - "-environment=prod"
+      - "-docker-network=omni-notify_default"
+      - "-listen=:8088"
+      - "-upstream=http://omni-notify:8080"
+      - "-flush-interval=10s"
+    environment:
+      NETVIZ_URL: "${NETVIZ_URL:-http://192.168.68.34:8099}"
+      NETVIZ_TOKEN: "${NETVIZ_INGEST_TOKEN:-}"
+    ports:
+      - "8088:8088"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
 volumes:
   omni-notify-data:
