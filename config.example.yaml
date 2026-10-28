@@ -79,6 +79,19 @@ providers:
       to:
         - "ops@example.com"
 
+  # Telegram with photos and buttons (see README "Telegram photos and buttons").
+  # Without image_hosts/callback_hosts it sends plain text, as before.
+  # - name: telegram-home
+  #   kind: telegram
+  #   secret: "${TELEGRAM_BOT_TOKEN}"
+  #   config:
+  #     chat_id: "123456789"
+  #     image_hosts: ["media.example.com"]     # image_url → a photo
+  #     callback_hosts: ["media.example.com"]  # callbacks → buttons that POST
+  #     callback_headers:
+  #       X-Media-Request: "1"
+  #     callback_user_ids: [123456789]         # who may press (default: the chat)
+
 # Routes seeded into SQLite on boot. Match keys: type, source, severity, status,
 # and dotted labels.<k> / annotations.<k>. All conditions must match (exact).
 # Routes evaluate in priority order (higher first); ties broken by name. By

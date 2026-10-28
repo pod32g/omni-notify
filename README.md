@@ -207,7 +207,7 @@ unless `metrics_require_auth: true`.
 | `slack`      | webhook URL       | `username`, `icon_emoji`                            |
 | `webhook`    | target URL¹       | `method`, `content_type`, `headers`, `template`     |
 | `smtp`       | password          | `host`, `port`, `username`, `from`, `to[]`, `tls`, `subject_template` |
-| `telegram`   | bot token         | `chat_id` (req), `parse_mode`                       |
+| `telegram`   | bot token         | `chat_id` (req), `parse_mode`, photos and buttons² |
 | `ntfy`       | topic URL         | `priority`, `tags`, `token`                         |
 | `gotify`     | app token         | `url` (req, server base), `priority`                |
 | `pushover`   | API token         | `user` (req), `priority`, `device`                  |
@@ -242,6 +242,54 @@ Provider URLs must be `http`/`https`. When
 `security.allow_private_webhook_targets` is `false` (default), targets that are —
 or resolve to — loopback/private/link-local/multicast addresses are rejected
 (checked both at create time and at connection time).
+
+² **Telegram photos and buttons.** Three event annotations are rendering hints
+for Telegram (never listed in its text; other providers list them as before):
+
+| Annotation  | Value                                   | Rendered as |
+|-------------|-----------------------------------------|-------------|
+| `image_url` | an http(s) image URL                    | a photo (`sendPhoto`) with the text as its caption (cut to 1,024 characters) |
+| `actions`   | JSON list of `{"label","url"}`          | link buttons (opening one changes nothing) |
+| `callbacks` | JSON list of `{"label","url"}`          | buttons that make Omni-Notify `POST` to the URL |
+
+All of it is off until the provider's config allows it:
+
+| Config key          | Default  | Meaning |
+|---------------------|----------|---------|
+| `image_hosts`       | none     | hosts an `image_url` may be fetched from; none = text only |
+| `image_max_bytes`   | 5 MiB    | largest image fetched (at most 10 MiB, Telegram's limit) |
+| `callback_hosts`    | none     | hosts a `callbacks` URL may be on; none = no callback buttons and no polling |
+| `callback_headers`  | none     | headers sent with every callback request |
+| `callback_user_ids` | anyone   | Telegram user IDs who may press callback buttons (anyone in the chat otherwise) |
+| `callback_ttl`      | `168h`   | how long a callback button works after its event arrived |
+
+- **Photos.** Omni-Notify fetches the image itself (5 s, the size cap, http(s)
+  only, redirects only to allowed hosts, the bytes must be JPEG, PNG or WebP)
+  and uploads it. Any failure, Telegram refusing the photo included, sends the
+  text message instead; a message Telegram refuses because of its buttons goes
+  out again without them.
+- **Callback buttons** need the stored event, so test sends never get them.
+  Their `callback_data` names the event and the entry, signed with a key derived
+  from the bot token and bound to the chat. Omni-Notify has no address Telegram
+  can reach, so it long-polls `getUpdates` (callback queries only) for every bot
+  with `callback_hosts`: that bot must have no webhook and no other `getUpdates`
+  consumer (a 409 in the log means one exists). A press is accepted only from
+  the provider's chat (and `callback_user_ids`), checked against the provider's
+  current config, answered at once, then run: `POST <url>` with no body and the
+  `callback_headers`, never following a redirect. A 2xx answer turns the button
+  into "✓ <label>"; anything else is posted as a reply to the message
+  (`{"error": "…"}` answers are quoted). Presses Telegram no longer lets
+  Omni-Notify answer (made while it was down) are not run.
+
+```sh
+# Posters, link buttons and Retry buttons for Omni-Media (PATCH merges config keys)
+curl -X PATCH http://localhost:8080/api/v1/providers/tg-home \
+  -H "Authorization: Bearer $OMNI_NOTIFY_API_TOKEN" \
+  -d '{"config":{"image_hosts":["media.omni.pod32g.dev"],
+        "callback_hosts":["media.omni.pod32g.dev"],
+        "callback_headers":{"X-Media-Request":"1"},
+        "callback_user_ids":[123456789]}}'
+```
 
 On `POST`/`PUT`/`PATCH`, a provider's secret is only changed when a non-empty
 `secret` is supplied; omit it to keep the stored one (secrets are never readable

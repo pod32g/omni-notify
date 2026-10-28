@@ -166,7 +166,7 @@ func (n *Notifier) deliver(ctx context.Context, d models.Delivery) {
 		return
 	}
 
-	msg := models.NotificationMessage{Event: stored.Event, Route: d.Route}
+	msg := models.NotificationMessage{Event: stored.Event, Route: d.Route, EventRef: stored.ID, DeliveryID: d.ID}
 	sendCtx, cancel := context.WithTimeout(ctx, n.cfg.SendTimeout)
 	start := time.Now()
 	sendErr := prov.Send(sendCtx, msg)

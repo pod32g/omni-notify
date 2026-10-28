@@ -163,6 +163,15 @@ func run(configPath string) error {
 		return err
 	}
 
+	// Telegram callback buttons: polls the bots of Telegram providers that have
+	// callback_hosts (none by default) and runs the buttons pressed.
+	callbacks := providers.NewTelegramCallbacks(store, allowPrivate, log)
+	callbacksDone := make(chan struct{})
+	go func() {
+		defer close(callbacksDone)
+		callbacks.Run(deliveryCtx)
+	}()
+
 	// HTTP server.
 	srv := api.NewServer(store, n, registry, m, promReg, log, api.Config{
 		Addr:               cfg.Server.Addr,
@@ -184,6 +193,7 @@ func run(configPath string) error {
 	case err := <-serverErr:
 		cancelDelivery()
 		n.Stop()
+		<-callbacksDone
 		return err
 	case s := <-sig:
 		log.Info("shutting down", "signal", s.String())
@@ -197,6 +207,7 @@ func run(configPath string) error {
 	}
 	cancelDelivery()
 	n.Stop()
+	<-callbacksDone
 	log.Info("shutdown complete")
 	return nil
 }
