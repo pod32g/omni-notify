@@ -43,3 +43,51 @@ log:
     endpoint: "http://192.168.68.34:8080/api/v1/ingest"
     api_key: "${OMNI_LOGGING_API_KEY}"
     service: "omni-notify"
+
+# The on-call plugin (docs/plugins/oncall.md): incidents, schedules and
+# escalation for the Omni On-Call app, served at /oncall/api/v1. The phone
+# reaches it through Omni Access (notify.omni.pod32g.dev, an enrolled device's
+# token in Proxy-Authorization) with its own token in Authorization.
+#
+# A starter directory: only the owner so far. Add people (token_sha256 is the
+# SHA-256 of their token, never the token), their contacts (Notify provider
+# names a page goes through), schedules and policies here; routes to providers
+# of kind oncall turn alerts into incidents.
+plugins:
+  oncall:
+    enabled: true
+    storage:
+      path: "/data/oncall.db"
+    users:
+      - id: u_pod32g
+        name: pod32g
+        timezone: America/Mexico_City
+        token_sha256: "88d701883e6da8a8dde9e6e576bda7eeafc124b549d7cfe3c710a3b6b50229b0"
+        contacts: []
+    teams:
+      - {id: t_omni, name: Omni, members: [u_pod32g]}
+    schedules:
+      - id: sch_primary
+        name: Primary
+        team: t_omni
+        timezone: America/Mexico_City
+        rotation: weekly
+        handoff: "09:00"
+        start: "2026-10-26"
+        users: [u_pod32g]
+    escalation_policies:
+      - id: ep_omni
+        name: Omni escalation
+        team: t_omni
+        repeat: 2
+        levels:
+          - {delay: 10m, schedules: [sch_primary]}
+    services:
+      - {id: svc_jellyfin, name: jellyfin, description: "Media server: streaming and transcoding.", escalation_policy: ep_omni}
+      - {id: svc_media_host, name: media-host, description: "Media storage host (cold, cold2).", escalation_policy: ep_omni}
+      - {id: svc_omni_media, name: omni-media, description: "Episode tracker and downloads.", escalation_policy: ep_omni}
+      - {id: svc_identity, name: omni-identity, description: "Sign-in for every Omni service.", escalation_policy: ep_omni}
+      - {id: svc_access, name: omni-access, description: "Gateway for *.omni.pod32g.dev.", escalation_policy: ep_omni}
+      - {id: svc_notify, name: omni-notify, description: "Notification delivery.", escalation_policy: ep_omni}
+      - {id: svc_metrics, name: omni-metrics, description: "Metrics and alert rules.", escalation_policy: ep_omni}
+      - {id: svc_logging, name: omni-logging, description: "Log collection and search.", escalation_policy: ep_omni}
