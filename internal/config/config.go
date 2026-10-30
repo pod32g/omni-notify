@@ -21,6 +21,9 @@ type Config struct {
 	Log       LogConfig      `yaml:"log"`
 	Providers []ProviderSeed `yaml:"providers"`
 	Routes    []RouteSeed    `yaml:"routes"`
+	// Plugins holds each plugin's own section, keyed by plugin name. A plugin
+	// runs when its section has `enabled: true`; the plugin parses the rest.
+	Plugins map[string]yaml.Node `yaml:"plugins"`
 }
 
 // ServerConfig holds HTTP server settings.

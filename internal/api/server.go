@@ -24,6 +24,8 @@ type Config struct {
 	MetricsRequireAuth bool
 	ReadTimeout        time.Duration
 	WriteTimeout       time.Duration
+	// Plugins are served under /<name>/ and authenticate their own requests.
+	Plugins map[string]http.Handler
 }
 
 // Server wires the REST API to the storage, notifier and metrics layers.
@@ -117,6 +119,10 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /api/v1/deliveries", s.handleListDeliveries)
 	mux.HandleFunc("POST /api/v1/test", s.handleTest)
+
+	for name, h := range s.cfg.Plugins {
+		mux.Handle("/"+name+"/", http.StripPrefix("/"+name, h))
+	}
 
 	// Middleware chain, outermost first.
 	var h http.Handler = mux

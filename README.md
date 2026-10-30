@@ -456,6 +456,18 @@ already wire this env through; just set `OMNI_LOGGING_API_KEY` in your host `.en
 > does not apply to the log shipper — it uses its own plain HTTP client so private
 > targets like `192.168.68.34` are reachable.
 
+## Plugins
+
+Optional parts of Omni-Notify that aren't delivery live behind a small seam
+(`internal/plugin`). A plugin is compiled in and **off unless its `plugins.<name>`
+config section says `enabled: true`**. It owns its own data and routes under
+`/<name>/`, and reaches the core only by adding provider kinds (so routes can send
+events to it) and by asking for deliveries through named providers.
+
+| Plugin | What it adds |
+|--------|--------------|
+| `oncall` | Incidents, on-call schedules and escalation for the Omni On-Call app: see [docs/plugins/oncall.md](docs/plugins/oncall.md) |
+
 ## Configuration
 
 See [`config.example.yaml`](config.example.yaml). `${ENV}` references are resolved

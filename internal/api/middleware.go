@@ -111,10 +111,16 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
 // isExempt reports whether a path bypasses authentication. The UI shell ("/" and
 // its static assets) and /healthz are always open; the JS calls the authenticated
-// API with a bearer token. /metrics is open unless configured otherwise.
+// API with a bearer token. /metrics is open unless configured otherwise. Plugin
+// routes authenticate themselves.
 func (s *Server) isExempt(path string) bool {
 	if path == "/healthz" || path == "/" || strings.HasPrefix(path, "/assets/") {
 		return true
+	}
+	for name := range s.cfg.Plugins {
+		if strings.HasPrefix(path, "/"+name+"/") {
+			return true
+		}
 	}
 	if path == "/metrics" && !s.cfg.MetricsRequireAuth {
 		return true

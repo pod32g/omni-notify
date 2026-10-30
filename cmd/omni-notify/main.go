@@ -23,6 +23,7 @@ import (
 	"github.com/pod32g/omni-notify/internal/metrics"
 	"github.com/pod32g/omni-notify/internal/models"
 	"github.com/pod32g/omni-notify/internal/notifier"
+	"github.com/pod32g/omni-notify/internal/plugin"
 	"github.com/pod32g/omni-notify/internal/providers"
 	"github.com/pod32g/omni-notify/internal/storage"
 	"github.com/prometheus/client_golang/prometheus"
@@ -157,6 +158,20 @@ func run(configPath string) error {
 		DefaultRepeatInterval: cfg.Dedupe.DefaultRepeatInterval.D(),
 	})
 
+	// Plugins start before deliveries, so a queued delivery to a plugin's
+	// provider kind finds it registered.
+	pluginHandlers, stopPlugins, err := startPlugins(ctx, cfg.Plugins, plugin.Host{
+		Log:          log,
+		Clock:        clk,
+		Providers:    registry,
+		Deliver:      n.Deliver,
+		IsAdminToken: plugin.TokenMatcher(cfg.Security.Tokens),
+	})
+	if err != nil {
+		return err
+	}
+	defer stopPlugins()
+
 	deliveryCtx, cancelDelivery := context.WithCancel(context.Background())
 	if err := n.Start(deliveryCtx); err != nil {
 		cancelDelivery()
@@ -180,6 +195,7 @@ func run(configPath string) error {
 		MetricsRequireAuth: cfg.Security.MetricsRequireAuth,
 		ReadTimeout:        cfg.Server.ReadTimeout.D(),
 		WriteTimeout:       cfg.Server.WriteTimeout.D(),
+		Plugins:            pluginHandlers,
 	})
 
 	serverErr := make(chan error, 1)
