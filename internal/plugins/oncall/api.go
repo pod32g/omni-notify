@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -13,8 +14,9 @@ import (
 )
 
 // Handler serves the app's API (docs/oncall/API.md in the iOS repo) under
-// /oncall/api/v1. Every request is a person: a bearer token whose SHA-256 is
-// a user's token_sha256.
+// /oncall/api/v1. Every request is a person: an Omni Identity access token
+// naming a user's identity, or a personal token whose SHA-256 is a user's
+// token_sha256.
 func (p *Plugin) Handler() http.Handler {
 	mux := http.NewServeMux()
 	h := func(pattern string, fn func(*http.Request, *person) (int, any)) {
@@ -44,10 +46,12 @@ func (p *Plugin) Handler() http.Handler {
 // plugin's lock and stamps the answer with as_of.
 func (p *Plugin) serve(fn func(*http.Request, *person) (int, any)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		me := p.authenticate(r)
+		me, status, refusal := p.authenticate(r)
 		if me == nil {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="omni-oncall"`)
-			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "missing or invalid bearer token", "code": "unauthorized"})
+			if status == http.StatusUnauthorized {
+				w.Header().Set("WWW-Authenticate", `Bearer realm="omni-oncall"`)
+			}
+			writeJSON(w, status, refusal)
 			return
 		}
 		key := r.Header.Get("Idempotency-Key")
@@ -88,15 +92,44 @@ func (p *Plugin) serve(fn func(*http.Request, *person) (int, any)) http.HandlerF
 	}
 }
 
-func (p *Plugin) authenticate(r *http.Request) *person {
+// authenticate finds the person behind the bearer token, or says why not.
+func (p *Plugin) authenticate(r *http.Request) (*person, int, map[string]any) {
+	refuse := func(status int, code, msg string) (*person, int, map[string]any) {
+		return nil, status, map[string]any{"error": msg, "code": code}
+	}
 	const prefix = "Bearer "
 	h := r.Header.Get("Authorization")
-	if !strings.HasPrefix(h, prefix) {
-		return nil
+	tok := ""
+	if strings.HasPrefix(h, prefix) {
+		tok = strings.TrimSpace(h[len(prefix):])
 	}
-	tok := strings.TrimSpace(h[len(prefix):])
 	if tok == "" {
-		return nil
+		return refuse(http.StatusUnauthorized, "unauthorized", "missing bearer token")
+	}
+	if p.verifier != nil && looksLikeJWT(tok) {
+		c, err := p.verifier.verify(r.Context(), tok)
+		if errors.Is(err, errIdentityDown) {
+			p.log.Warn("on-call sign-in: Identity unreachable", "err", err)
+			return refuse(http.StatusServiceUnavailable, "identity_unavailable", "Omni Identity can't be reached to check your sign-in.")
+		}
+		if err != nil {
+			return refuse(http.StatusUnauthorized, "unauthorized", "Omni sign-in not accepted: "+err.Error())
+		}
+		name := c.Username
+		if name == "" {
+			name = c.Subject
+		}
+		u := p.dir.byIdentity[c.Username]
+		if u == nil || c.Username == "" {
+			u = p.dir.byIdentity[c.Subject]
+		}
+		if u != nil {
+			if prev, _ := p.signIns.Swap(u.ID, c.DeviceID); prev != c.DeviceID {
+				p.log.Info("on-call sign-in", "user", u.ID, "identity", name, "device", c.DeviceID)
+			}
+			return u, 0, nil
+		}
+		return refuse(http.StatusForbidden, "not_in_directory", name+" is signed in to Omni but isn't in the on-call directory.")
 	}
 	sum := sha256.Sum256([]byte(tok))
 	var found *person
@@ -105,7 +138,10 @@ func (p *Plugin) authenticate(r *http.Request) *person {
 			found = u
 		}
 	}
-	return found
+	if found == nil {
+		return refuse(http.StatusUnauthorized, "unauthorized", "missing or invalid bearer token")
+	}
+	return found, 0, nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

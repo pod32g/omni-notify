@@ -1,6 +1,7 @@
 # The on-call plugin
 
-**Status:** built on branch `oncall` (2026-10-29), off by default, not deployed.
+**Status:** on `main` since 2026-10-29, off by default; on at chizu with an owner-only starter
+directory. Sign-in with Omni Identity added 2026-10-30.
 **Client:** the Omni On-Call iOS app (`omni-notify-ios`), whose contract is its
 `docs/oncall/API.md`.
 
@@ -15,7 +16,7 @@ omni-metrics ─event─▶ Notify core ─route─▶ provider "oncall-jellyfin
                          ▲                                                            │ opens, adds to,
                          │ Deliver(page event, the person's providers)               │ resolves, escalates
                          └────────────────────────────────────────────────────────────┘
-iPhone ─/oncall/api/v1 (person's token)─▶ plugin
+iPhone ─/oncall/api/v1 (Omni Identity token, or a personal token)─▶ plugin
 ```
 
 The plugin talks to the core in two ways only, both through `internal/plugin.Host`:
@@ -47,11 +48,16 @@ plugins:
     enabled: true
     storage: {path: /data/oncall.db}
     escalation_delay: 5m          # a level's default wait before the next level
+    identity:                     # sign-in with Omni Identity (optional)
+      issuer: https://identity.omni.pod32g.dev
+      audiences: [omni_vy47oxmf]  # the Omni Access gateway's client id
+      # jwks_url: …               # by default from the issuer's discovery document
     users:
       - id: u_david
         name: David
+        identity: david           # Omni Identity username (or subject)
         timezone: America/Mexico_City
-        token_sha256: <hex>       # printf %s "$TOKEN" | shasum -a 256
+        token_sha256: <hex>       # optional personal token: printf %s "$TOKEN" | shasum -a 256
         contacts: [telegram-david] # Notify providers a page goes through
         # capabilities: [create_incident, reassign, escalate, resolve, manage_overrides]
     teams:
@@ -125,15 +131,32 @@ start. Incidents, overrides, the timeline and the feed live in the plugin's data
 `/me` includes `server: {kind: "omni-notify"}` so the app can tell it from the development
 stand-in.
 
-**Auth:** `Authorization: Bearer <token>`, where the token's SHA-256 is a user's `token_sha256`.
-Notify's admin tokens are not accepted here. Sign-in with Omni Identity (an access token's `sub`
-mapped to a user) replaces this once the iOS client exists in Identity.
+**Auth:** `Authorization: Bearer <token>`, one of:
+- **An Omni Identity access token** (when `identity` is set): signed by the issuer (EdDSA or RS256,
+  keys from its JWKS, cached ten minutes), for one of `audiences`, unexpired. Its
+  `preferred_username`, else its `sub`, is matched against the users' `identity`. A valid token
+  for someone not in the directory gets 403 `not_in_directory`; Identity unreachable with no cached
+  key gets 503 `identity_unavailable`.
+- **A personal token** whose SHA-256 is a user's `token_sha256`, for scripts and development.
+
+Notify's admin tokens are not accepted here.
+
+**How the app signs in.** Notify is behind Omni Access, which admits only an enrolled device's
+token. The Omni On-Call app shares the Omni Access app's sign-in on the iPhone (same team, its app
+group `group.com.omni.access`) and mints the same short-lived token the Access tunnel uses
+(RFC 8693, audience = the gateway's client id). It sends that token twice:
+`Proxy-Authorization` for the gateway, which checks and strips only that header, and
+`Authorization` for the plugin, which checks it again and maps the person. So `audiences` is
+the gateway's client id (`GET <gateway>/api/v1/meta` → `client_id`).
+
+**Reaching Identity from the container.** The plugin fetches Identity's keys over HTTPS. chizu's
+containers resolve with a public resolver, so `docker-compose.yml` gives Notify the Pi-hole first
+(`OMNI_NOTIFY_DNS`), as Omni Access does.
 
 ## Not yet
 
 - Push to the app. An APNs alert provider in Notify is still missing; today pages go through
   whatever providers a person lists (Telegram, ntfy, Pushover, …).
-- Sign-in with Omni Identity, and a route through Omni Access.
 - Shift swaps (`request_swaps` is never granted), service health from omni-metrics (`health` is
   empty), editing the directory through the API, and Telegram buttons that acknowledge.
 

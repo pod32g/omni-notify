@@ -125,9 +125,12 @@ routes:
 #   oncall:
 #     enabled: true
 #     storage: {path: "./oncall.db"}
+#     identity:                     # sign-in with Omni Identity (optional)
+#       issuer: "https://identity.example"
+#       audiences: ["<Omni Access gateway client id>"]
 #     users:
-#       - {id: u_david, name: David, timezone: America/Mexico_City,
-#          token_sha256: "<sha256 of the person's token>", contacts: [discord-home]}
+#       - {id: u_david, name: David, timezone: America/Mexico_City, identity: david,
+#          token_sha256: "<sha256 of a personal token>", contacts: [discord-home]}
 #     schedules:
 #       - {id: sch_primary, name: Primary, timezone: America/Mexico_City, rotation: weekly,
 #          handoff: "09:00", start: "2026-11-02", users: [u_david]}

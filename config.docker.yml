@@ -58,10 +58,17 @@ plugins:
     enabled: true
     storage:
       path: "/data/oncall.db"
+    # Sign-in with Omni Identity. The Omni On-Call app reuses the phone's Omni
+    # Access sign-in, whose tokens are for the Access gateway (its client id).
+    identity:
+      issuer: "https://identity.omni.pod32g.dev"
+      audiences: [omni_vy47oxmf]
     users:
       - id: u_pod32g
         name: pod32g
+        identity: pod32g
         timezone: America/Mexico_City
+        # A personal token for scripts (curl over SSH); the app signs in with Omni.
         token_sha256: "88d701883e6da8a8dde9e6e576bda7eeafc124b549d7cfe3c710a3b6b50229b0"
         contacts: []
     teams:

@@ -29,6 +29,10 @@ type Plugin struct {
 	host plugin.Host
 	log  *slog.Logger
 	db   *store
+	// verifier checks Omni Identity tokens; nil without an identity section.
+	verifier *verifier
+	// signIns is the device each person last signed in from, to log a change.
+	signIns sync.Map // user id → device id
 
 	mu         sync.Mutex
 	incidents  map[string]*incident
@@ -55,7 +59,11 @@ func New(section yaml.Node) (plugin.Plugin, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Plugin{cfg: cfg, dir: dir}, nil
+	p := &Plugin{cfg: cfg, dir: dir}
+	if cfg.Identity.Issuer != "" {
+		p.verifier = newVerifier(cfg.Identity)
+	}
+	return p, nil
 }
 
 // Name is the config key and URL prefix.
@@ -74,6 +82,9 @@ func (p *Plugin) Start(ctx context.Context, host plugin.Host) error {
 		return err
 	}
 	p.db = db
+	if p.verifier != nil {
+		p.verifier.now = p.now
+	}
 	if err := p.load(ctx); err != nil {
 		_ = db.close()
 		return err
@@ -84,7 +95,8 @@ func (p *Plugin) Start(ctx context.Context, host plugin.Host) error {
 	p.cancel, p.done = cancel, make(chan struct{})
 	go p.run(loopCtx)
 	p.log.Info("on-call plugin ready", "users", len(p.dir.users), "services", len(p.dir.services),
-		"schedules", len(p.dir.schedules), "incidents", len(p.incidents), "db", p.cfg.Storage.Path)
+		"schedules", len(p.dir.schedules), "incidents", len(p.incidents), "db", p.cfg.Storage.Path,
+		"identity", p.cfg.Identity.Issuer)
 	return nil
 }
 

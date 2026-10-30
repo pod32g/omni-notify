@@ -21,12 +21,25 @@ type Config struct {
 	} `yaml:"storage"`
 	// EscalationDelay is how long a level has to acknowledge before the next
 	// one is paged, when the level doesn't say.
-	EscalationDelay    models.Duration  `yaml:"escalation_delay"`
+	EscalationDelay models.Duration `yaml:"escalation_delay"`
+	// Identity, when set, lets people sign in with Omni Identity.
+	Identity           IdentityConfig   `yaml:"identity"`
 	Users              []UserConfig     `yaml:"users"`
 	Teams              []TeamConfig     `yaml:"teams"`
 	Schedules          []ScheduleConfig `yaml:"schedules"`
 	EscalationPolicies []PolicyConfig   `yaml:"escalation_policies"`
 	Services           []ServiceConfig  `yaml:"services"`
+}
+
+// IdentityConfig accepts Omni Identity access tokens (identity.go).
+type IdentityConfig struct {
+	// Issuer is Omni Identity's issuer URL.
+	Issuer string `yaml:"issuer"`
+	// JWKSURL is where its signing keys are; by default discovery says.
+	JWKSURL string `yaml:"jwks_url"`
+	// Audiences a token must be for, at least one: the Omni Access gateway's
+	// client id lets the app use the phone's Omni Access sign-in.
+	Audiences []string `yaml:"audiences"`
 }
 
 // UserConfig is one person who can be on call.
@@ -36,8 +49,11 @@ type UserConfig struct {
 	Email    string `yaml:"email"`
 	Timezone string `yaml:"timezone"`
 	Phone    string `yaml:"phone"`
-	// TokenSHA256 is the hex SHA-256 of the person's API token (until sign-in
-	// with Omni-Identity). The token itself is never stored.
+	// Identity is the person's Omni Identity username (or subject), for
+	// sign-in with Omni Identity.
+	Identity string `yaml:"identity"`
+	// TokenSHA256 is the hex SHA-256 of a personal API token, for scripts and
+	// development. The token itself is never stored.
 	TokenSHA256 string `yaml:"token_sha256"`
 	// Contacts are the Notify providers a page to this person goes through.
 	Contacts []string `yaml:"contacts"`
@@ -117,6 +133,7 @@ type User struct {
 
 type person struct {
 	User
+	identity string // Omni Identity username or subject, "" without one
 	token    []byte // SHA-256, nil without one
 	contacts []string
 	caps     map[string]bool
@@ -163,11 +180,12 @@ type service struct {
 }
 
 type directory struct {
-	users     map[string]*person
-	teams     map[string]*team
-	schedules map[string]*schedule
-	policies  map[string]*policy
-	services  map[string]*service
+	users      map[string]*person
+	byIdentity map[string]*person
+	teams      map[string]*team
+	schedules  map[string]*schedule
+	policies   map[string]*policy
+	services   map[string]*service
 	// Config order, for stable listings.
 	userIDs, scheduleIDs, policyIDs, serviceIDs []string
 }
@@ -197,8 +215,16 @@ func (d *directory) teamRef(id string) Ref {
 // buildDirectory checks the config and resolves every reference.
 func buildDirectory(c Config) (*directory, error) {
 	d := &directory{
-		users: map[string]*person{}, teams: map[string]*team{}, schedules: map[string]*schedule{},
+		users: map[string]*person{}, byIdentity: map[string]*person{}, teams: map[string]*team{}, schedules: map[string]*schedule{},
 		policies: map[string]*policy{}, services: map[string]*service{},
+	}
+	if c.Identity.Issuer != "" {
+		if !strings.HasPrefix(c.Identity.Issuer, "https://") && !strings.HasPrefix(c.Identity.Issuer, "http://") {
+			return nil, fmt.Errorf("identity.issuer must be an http(s) URL")
+		}
+		if len(c.Identity.Audiences) == 0 {
+			return nil, fmt.Errorf("identity.audiences: name at least one (the Omni Access gateway's client id)")
+		}
 	}
 	defaultDelay := c.EscalationDelay.D()
 	if defaultDelay <= 0 {
@@ -226,6 +252,16 @@ func buildDirectory(c Config) (*directory, error) {
 				return nil, fmt.Errorf("users.%s: token_sha256 must be 64 hex characters", u.ID)
 			}
 			p.token = sum
+		}
+		if u.Identity != "" {
+			if c.Identity.Issuer == "" {
+				return nil, fmt.Errorf("users.%s: identity needs the identity section (issuer and audiences)", u.ID)
+			}
+			if other, dup := d.byIdentity[u.Identity]; dup {
+				return nil, fmt.Errorf("users.%s: identity %q is already %s's", u.ID, u.Identity, other.ID)
+			}
+			p.identity = u.Identity
+			d.byIdentity[u.Identity] = p
 		}
 		caps := u.Capabilities
 		if caps == nil {

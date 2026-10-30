@@ -72,8 +72,13 @@ type harness struct {
 
 func newHarness(t *testing.T, dbPath string, at time.Time) *harness {
 	t.Helper()
+	return newHarnessFrom(t, testConfig(dbPath), at)
+}
+
+func newHarnessFrom(t *testing.T, cfg string, at time.Time) *harness {
+	t.Helper()
 	var node yaml.Node
-	if err := yaml.Unmarshal([]byte(testConfig(dbPath)), &node); err != nil {
+	if err := yaml.Unmarshal([]byte(cfg), &node); err != nil {
 		t.Fatal(err)
 	}
 	pl, err := New(*node.Content[0])
