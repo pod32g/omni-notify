@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 
@@ -40,41 +41,66 @@ func newOpsgenie(client *http.Client, cfg map[string]any, secret string, allowPr
 }
 
 type opsgenieCreate struct {
-	Message     string `json:"message"`
-	Description string `json:"description,omitempty"`
-	Alias       string `json:"alias,omitempty"`
-	Source      string `json:"source,omitempty"`
+	Message     string            `json:"message"`
+	Description string            `json:"description,omitempty"`
+	Alias       string            `json:"alias,omitempty"`
+	Source      string            `json:"source,omitempty"`
+	Priority    string            `json:"priority,omitempty"`
+	Tags        []string          `json:"tags,omitempty"`
+	Details     map[string]string `json:"details,omitempty"`
+	Actions     []string          `json:"actions,omitempty"`
+	Entity      string            `json:"entity,omitempty"`
+	Note        string            `json:"note,omitempty"`
+	User        string            `json:"user,omitempty"`
+	Responders  []json.RawMessage `json:"responders,omitempty"`
+	VisibleTo   []json.RawMessage `json:"visibleTo,omitempty"`
 }
 
 type opsgenieClose struct {
 	Source string `json:"source"`
+	Note   string `json:"note,omitempty"`
 }
 
 func (o *opsgenie) Send(ctx context.Context, msg models.NotificationMessage) error {
 	ev := msg.Event
+	ov := overrideOf(ev, "opsgenie", parseOpsgenieOverride)
 	alias := ev.Fingerprint
 	if alias == "" {
 		alias = ev.EventID
 	}
+	if ov.Alias != "" {
+		alias = ov.Alias
+	}
 	headers := map[string]string{"Authorization": "GenieKey " + o.apiKey}
-
 	if ev.Status == models.StatusResolved {
 		closeURL := o.apiURL + "/" + url.PathEscape(alias) + "/close?identifierType=alias"
-		body, err := json.Marshal(opsgenieClose{Source: "omni-notify"})
-		if err != nil {
-			return fmt.Errorf("opsgenie: marshal: %w", err)
-		}
-		return postBytes(ctx, o.client, http.MethodPost, closeURL, "application/json", body, headers)
+		_, err := sendJSON(ctx, o.client, http.MethodPost, closeURL, opsgenieClose{Source: "omni-notify", Note: ov.Note}, headers)
+		return err
 	}
-
-	body, err := json.Marshal(opsgenieCreate{
-		Message:     truncate(subjectLine(ev), 130),
-		Description: plainBody(ev),
+	plain := opsgenieCreate{
+		Message:     truncate(headline(ev), 130),
+		Description: bodyText(ev),
 		Alias:       alias,
 		Source:      ev.Source,
-	})
-	if err != nil {
-		return fmt.Errorf("opsgenie: marshal: %w", err)
 	}
-	return postBytes(ctx, o.client, http.MethodPost, o.apiURL, "application/json", body, headers)
+	if isEmptyOverride(ov) {
+		_, err := sendJSON(ctx, o.client, http.MethodPost, o.apiURL, plain, headers)
+		return err
+	}
+	rich := plain
+	if ov.Message != "" {
+		rich.Message = ov.Message
+	}
+	if ov.Description != "" {
+		rich.Description = ov.Description
+	}
+	rich.Priority, rich.Tags, rich.Details, rich.Actions = ov.Priority, ov.Tags, ov.Details, ov.Actions
+	rich.Entity, rich.Note, rich.User = ov.Entity, ov.Note, ov.User
+	rich.Responders, rich.VisibleTo = ov.Responders, ov.VisibleTo
+	_, err := sendJSON(ctx, o.client, http.MethodPost, o.apiURL, rich, headers)
+	if isPayloadRefused(err) {
+		slog.Warn("opsgenie: sending the plain alert instead", "err", err)
+		_, err = sendJSON(ctx, o.client, http.MethodPost, o.apiURL, plain, headers)
+	}
+	return err
 }

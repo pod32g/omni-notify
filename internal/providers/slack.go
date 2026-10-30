@@ -2,8 +2,8 @@ package providers
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/pod32g/omni-notify/internal/models"
@@ -49,43 +49,76 @@ type slackAttachment struct {
 	TS     int64        `json:"ts,omitempty"`
 }
 
-type slackPayload struct {
-	Text        string            `json:"text,omitempty"`
-	Username    string            `json:"username,omitempty"`
-	IconEmoji   string            `json:"icon_emoji,omitempty"`
-	Attachments []slackAttachment `json:"attachments,omitempty"`
+func (s *slack) Send(ctx context.Context, msg models.NotificationMessage) error {
+	ov := overrideOf(msg.Event, "slack", parseSlackOverride)
+	plain := s.payload(msg, slackOverride{})
+	if isEmptyOverride(ov) {
+		return s.post(ctx, plain)
+	}
+	err := s.post(ctx, s.payload(msg, ov))
+	if isPayloadRefused(err) {
+		// Refused blocks (invalid_blocks) must not cost the message.
+		slog.Warn("slack: sending the plain message instead", "err", err)
+		return s.post(ctx, plain)
+	}
+	return err
 }
 
-func (s *slack) Send(ctx context.Context, msg models.NotificationMessage) error {
+// payload is the producer's text, blocks and attachments when the override
+// has any, else the default coloured attachment; with the override's options.
+func (s *slack) payload(msg models.NotificationMessage, ov slackOverride) map[string]any {
 	ev := msg.Event
-	att := slackAttachment{
-		Color: slackColor(ev),
-		Title: subjectLine(ev),
-		TS:    ev.Timestamp.Unix(),
-	}
-	text := ev.Summary
-	if ev.Description != "" {
-		if text != "" {
-			text += "\n"
+	p := map[string]any{}
+	if ov.Text != "" || len(ov.Blocks) > 0 || len(ov.Attachments) > 0 {
+		text := ov.Text
+		if text == "" {
+			text = bodyText(ev)
+			if !ev.Message.Custom() {
+				text = headline(ev)
+			}
 		}
-		text += ev.Description
+		p["text"] = text
+		if len(ov.Blocks) > 0 {
+			p["blocks"] = ov.Blocks
+		}
+		if len(ov.Attachments) > 0 {
+			p["attachments"] = ov.Attachments
+		}
+	} else {
+		att := slackAttachment{
+			Color: slackColor(ev),
+			Title: headline(ev),
+			Text:  summaryText(ev, "\n"),
+			TS:    ev.Timestamp.Unix(),
+		}
+		for _, kv := range detailFields(ev) {
+			att.Fields = append(att.Fields, slackField{Title: kv[0], Value: kv[1], Short: true})
+		}
+		p["attachments"] = []slackAttachment{att}
+		if msg.Test {
+			p["text"] = "Omni-Notify test notification"
+		}
 	}
-	att.Text = text
-	for _, kv := range detailFields(ev) {
-		att.Fields = append(att.Fields, slackField{Title: kv[0], Value: kv[1], Short: true})
+	set := func(k string, v string) {
+		if v != "" {
+			p[k] = v
+		}
 	}
+	set("username", s.username)
+	set("icon_emoji", s.iconEmoji)
+	set("username", ov.Username)
+	set("icon_emoji", ov.IconEmoji)
+	set("icon_url", ov.IconURL)
+	set("thread_ts", ov.ThreadTS)
+	for k, v := range map[string]*bool{"mrkdwn": ov.Mrkdwn, "unfurl_links": ov.UnfurlLinks, "unfurl_media": ov.UnfurlMedia} {
+		if v != nil {
+			p[k] = *v
+		}
+	}
+	return p
+}
 
-	payload := slackPayload{
-		Username:    s.username,
-		IconEmoji:   s.iconEmoji,
-		Attachments: []slackAttachment{att},
-	}
-	if msg.Test {
-		payload.Text = "Omni-Notify test notification"
-	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("slack: marshal: %w", err)
-	}
-	return postBytes(ctx, s.client, http.MethodPost, s.url, "application/json", body, nil)
+func (s *slack) post(ctx context.Context, payload map[string]any) error {
+	_, err := sendJSON(ctx, s.client, http.MethodPost, s.url, payload, nil)
+	return err
 }

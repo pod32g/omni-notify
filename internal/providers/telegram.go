@@ -1,10 +1,7 @@
 package providers
 
 import (
-	"context"
-	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -19,11 +16,16 @@ import (
 // secret: the bot token (required).
 // config:
 //   - chat_id:           target chat ID (required).
-//   - parse_mode:        optional formatting mode ("Markdown" or "HTML"); omitted when empty.
+//   - parse_mode:        formatting mode of the default layout ("Markdown" or
+//     "HTML"); omitted when empty. A producer's own text carries its own.
 //   - api_base:          optional API base URL (default "https://api.telegram.org").
-//   - image_hosts:       hosts an event's image_url may be fetched from, to send it
-//     as a photo; empty (the default) sends text only.
-//   - image_max_bytes:   largest image fetched (default 5 MiB, at most 10 MiB).
+//   - image_hosts, media_hosts: hosts Omni-Notify fetches media from itself and
+//     uploads (for hosts Telegram cannot reach); empty (the default) uploads
+//     nothing. Other media URLs in message.telegram are handed to Telegram.
+//   - image_max_bytes:   largest photo uploaded (default 5 MiB, at most 10 MiB).
+//   - media_max_bytes:   largest other media uploaded (default 20 MiB, at most 50 MiB).
+//   - message_thread_id: forum topic messages go to unless the event names one.
+//   - silent_severities: severities sent without sound (disable_notification).
 //   - callback_hosts:    hosts an event's callbacks may call; empty (the default)
 //     renders no callback buttons and polls nothing.
 //   - callback_headers:  headers sent with every callback request.
@@ -32,7 +34,11 @@ import (
 //   - callback_ttl:      how long a callback button works after its event
 //     arrived (default "168h").
 //
-// Three annotations are rendering hints, never listed in the text:
+// An event's message.telegram (see tgOverride) controls everything else: text
+// and formatting, rich messages, media and albums, buttons, delivery options,
+// and edits, replies, pins, reactions and deletions of earlier messages.
+//
+// Without it, three annotations are rendering hints, never listed in the text:
 //   - image_url: the message goes out as a photo (sendPhoto) with the text as
 //     its caption, when the URL's host is in image_hosts. Omni-Notify fetches
 //     the image itself; any failure falls back to a text message.
@@ -47,6 +53,7 @@ type telegram struct {
 	allowPrivate bool
 	settings     telegramSettings
 	callbackKey  []byte
+	store        MessageStore // nil: messages are not remembered by ref
 }
 
 // Telegram's limits for a message's text and a photo's caption.
@@ -62,8 +69,11 @@ type telegramSettings struct {
 	token           string
 	chatID          string
 	parseMode       string
-	imageHosts      hostSet
+	mediaHosts      hostSet
 	imageMaxBytes   int64
+	mediaMaxBytes   int64
+	threadID        int64
+	silent          map[models.Severity]bool
 	callbackHosts   hostSet
 	callbackHeaders map[string]string
 	callbackUsers   map[int64]bool
@@ -93,13 +103,31 @@ func parseTelegramSettings(cfg map[string]any, secret string, allowPrivate bool)
 		token:           secret,
 		chatID:          chatID,
 		parseMode:       cfgString(cfg, "parse_mode"),
-		imageHosts:      newHostSet(cfgStringSlice(cfg, "image_hosts")),
+		mediaHosts:      newHostSet(append(cfgStringSlice(cfg, "image_hosts"), cfgStringSlice(cfg, "media_hosts")...)),
 		imageMaxBytes:   int64(cfgInt(cfg, "image_max_bytes", defaultImageMaxBytes)),
+		mediaMaxBytes:   int64(cfgInt(cfg, "media_max_bytes", defaultMediaBytes)),
+		threadID:        int64(cfgInt(cfg, "message_thread_id", 0)),
 		callbackHosts:   newHostSet(cfgStringSlice(cfg, "callback_hosts")),
 		callbackHeaders: cfgStringMap(cfg, "callback_headers"),
 	}
 	if s.imageMaxBytes <= 0 || s.imageMaxBytes > maxImageBytes {
 		return telegramSettings{}, fmt.Errorf("telegram: image_max_bytes must be between 1 and %d", maxImageBytes)
+	}
+	if s.mediaMaxBytes <= 0 || s.mediaMaxBytes > maxMediaBytes {
+		return telegramSettings{}, fmt.Errorf("telegram: media_max_bytes must be between 1 and %d", maxMediaBytes)
+	}
+	if s.threadID < 0 {
+		return telegramSettings{}, fmt.Errorf("telegram: message_thread_id must be positive")
+	}
+	for _, sev := range cfgStringSlice(cfg, "silent_severities") {
+		sev := models.Severity(strings.ToLower(strings.TrimSpace(sev)))
+		if sev == models.SeverityNone || !sev.Valid() {
+			return telegramSettings{}, fmt.Errorf("telegram: silent_severities: unknown severity %q", sev)
+		}
+		if s.silent == nil {
+			s.silent = map[models.Severity]bool{}
+		}
+		s.silent[sev] = true
 	}
 	users, err := cfgInt64Set(cfg, "callback_user_ids")
 	if err != nil {
@@ -116,6 +144,12 @@ func parseTelegramSettings(cfg map[string]any, secret string, allowPrivate bool)
 // token: never log it or put it in an error.
 func (s telegramSettings) botBase() string { return s.apiBase + "/bot" + s.token }
 
+// botID is the bot's numeric ID, the token's public part before the colon.
+func (s telegramSettings) botID() string {
+	id, _, _ := strings.Cut(s.token, ":")
+	return id
+}
+
 // matchesChat reports whether chat is this provider's configured chat, given
 // either as a numeric ID or as "@username".
 func (s telegramSettings) matchesChat(chat tgChat) bool {
@@ -125,7 +159,7 @@ func (s telegramSettings) matchesChat(chat tgChat) bool {
 	return chat.Username != "" && strings.EqualFold("@"+chat.Username, s.chatID)
 }
 
-func newTelegram(client *http.Client, cfg map[string]any, secret string, allowPrivate bool) (Provider, error) {
+func newTelegram(client *http.Client, cfg map[string]any, secret string, allowPrivate bool, store MessageStore) (Provider, error) {
 	s, err := parseTelegramSettings(cfg, secret, allowPrivate)
 	if err != nil {
 		return nil, err
@@ -136,50 +170,8 @@ func newTelegram(client *http.Client, cfg map[string]any, secret string, allowPr
 		allowPrivate: allowPrivate,
 		settings:     s,
 		callbackKey:  callbackKey(secret),
+		store:        store,
 	}, nil
-}
-
-type telegramPayload struct {
-	ChatID                string      `json:"chat_id"`
-	Text                  string      `json:"text"`
-	DisableWebPagePreview bool        `json:"disable_web_page_preview"`
-	ParseMode             string      `json:"parse_mode,omitempty"`
-	ReplyMarkup           *tgKeyboard `json:"reply_markup,omitempty"`
-}
-
-func (t *telegram) Send(ctx context.Context, msg models.NotificationMessage) error {
-	ev := msg.Event
-	text := subjectLine(ev) + "\n\n" + plainBody(withoutRenderHints(ev))
-	markup := t.keyboard(msg)
-	if raw := ev.Annotations["image_url"]; raw != "" && len(t.settings.imageHosts) > 0 {
-		err := t.sendPhoto(ctx, raw, truncate(text, telegramCaptionLimit), markup)
-		if err == nil {
-			return nil
-		}
-		slog.Warn("telegram: sending without the photo", "event_id", ev.EventID, "err", err)
-	}
-	return t.sendMessage(ctx, truncate(text, telegramTextLimit), markup)
-}
-
-// sendMessage sends text. When Telegram refuses a message with buttons (a link
-// it will not open, say), the message goes out again without them: a button
-// must never cost the message.
-func (t *telegram) sendMessage(ctx context.Context, text string, markup *tgKeyboard) error {
-	payload := telegramPayload{
-		ChatID:                t.settings.chatID,
-		Text:                  text,
-		DisableWebPagePreview: true,
-		ParseMode:             t.settings.parseMode,
-		ReplyMarkup:           markup,
-	}
-	err := t.api.call(ctx, "sendMessage", payload, nil)
-	var refused *tgError
-	if markup != nil && errors.As(err, &refused) && refused.Status == http.StatusBadRequest {
-		slog.Warn("telegram: sending without buttons", "err", err)
-		payload.ReplyMarkup = nil
-		return t.api.call(ctx, "sendMessage", payload, nil)
-	}
-	return err
 }
 
 // renderHints are the annotations Telegram renders (a photo, buttons) rather

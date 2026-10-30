@@ -29,7 +29,7 @@ func TestNewMatrix_Send(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	cfg := map[string]any{"homeserver": srv.URL, "room_id": "!r:hs"}
-	p, err := newMatrix(srv.Client(), cfg, "tok3n", true)
+	p, err := newMatrix(srv.Client(), cfg, "tok3n", true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,10 @@ func TestNewMatrix_Send(t *testing.T) {
 		t.Errorf("authorization = %q, want %q", gotAuth, "Bearer tok3n")
 	}
 
-	var payload matrixMessage
+	var payload struct {
+		Msgtype string `json:"msgtype"`
+		Body    string `json:"body"`
+	}
 	if err := json.Unmarshal(gotBody, &payload); err != nil {
 		t.Fatalf("invalid matrix payload: %v\n%s", err, gotBody)
 	}
@@ -64,16 +67,16 @@ func TestNewMatrix_Send(t *testing.T) {
 
 func TestNewMatrix_RequiresToken(t *testing.T) {
 	cfg := map[string]any{"homeserver": "https://matrix.org", "room_id": "!r:hs"}
-	if _, err := newMatrix(http.DefaultClient, cfg, "", true); err == nil {
+	if _, err := newMatrix(http.DefaultClient, cfg, "", true, nil); err == nil {
 		t.Fatal("expected error for missing access token")
 	}
 }
 
 func TestNewMatrix_RequiresHomeserverAndRoom(t *testing.T) {
-	if _, err := newMatrix(http.DefaultClient, map[string]any{"room_id": "!r:hs"}, "tok", true); err == nil {
+	if _, err := newMatrix(http.DefaultClient, map[string]any{"room_id": "!r:hs"}, "tok", true, nil); err == nil {
 		t.Error("expected error for missing homeserver")
 	}
-	if _, err := newMatrix(http.DefaultClient, map[string]any{"homeserver": "https://matrix.org"}, "tok", true); err == nil {
+	if _, err := newMatrix(http.DefaultClient, map[string]any{"homeserver": "https://matrix.org"}, "tok", true, nil); err == nil {
 		t.Error("expected error for missing room_id")
 	}
 }
@@ -81,7 +84,7 @@ func TestNewMatrix_RequiresHomeserverAndRoom(t *testing.T) {
 func TestNewMatrix_Non2xxIsError(t *testing.T) {
 	srv, _ := captureServer(t, http.StatusForbidden)
 	cfg := map[string]any{"homeserver": srv.URL, "room_id": "!r:hs"}
-	p, err := newMatrix(srv.Client(), cfg, "tok", true)
+	p, err := newMatrix(srv.Client(), cfg, "tok", true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

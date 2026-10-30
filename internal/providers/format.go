@@ -8,6 +8,53 @@ import (
 	"github.com/pod32g/omni-notify/internal/models"
 )
 
+// headline is a notification's title: the producer's message title, else the
+// event title as is when the producer wrote the text, else the default
+// subjectLine.
+func headline(ev models.Event) string {
+	if ev.Message != nil && ev.Message.Title != "" {
+		return ev.Message.Title
+	}
+	if ev.Message.Custom() {
+		return ev.Title
+	}
+	return subjectLine(ev)
+}
+
+// bodyText is a notification's body: the producer's text as written, else the
+// default plainBody.
+func bodyText(ev models.Event) string {
+	if ev.Message.Custom() {
+		return ev.Message.Text
+	}
+	return plainBody(ev)
+}
+
+// fullText is the whole notification for channels with a single text and no
+// title slot: the producer's text alone, else the subject line and plainBody.
+func fullText(ev models.Event, sep string) string {
+	if ev.Message.Custom() {
+		return ev.Message.Text
+	}
+	return subjectLine(ev) + sep + plainBody(ev)
+}
+
+// summaryText is the summary and description, for channels that show the
+// details as fields beside it; the producer's text when it wrote one.
+func summaryText(ev models.Event, sep string) string {
+	if ev.Message.Custom() {
+		return ev.Message.Text
+	}
+	text := ev.Summary
+	if ev.Description != "" {
+		if text != "" {
+			text += sep
+		}
+		text += ev.Description
+	}
+	return text
+}
+
 // subjectLine builds a one-line summary like "[CRITICAL] Pi-hole Down".
 func subjectLine(ev models.Event) string {
 	tag := tagFor(ev)
@@ -118,8 +165,12 @@ func slackColor(ev models.Event) string {
 	}
 }
 
-// detailFields returns label/annotation key-value pairs for structured display.
+// detailFields returns label/annotation key-value pairs for structured display;
+// none when the producer wrote the text.
 func detailFields(ev models.Event) [][2]string {
+	if ev.Message.Custom() {
+		return nil
+	}
 	var out [][2]string
 	if ev.Source != "" {
 		out = append(out, [2]string{"Source", ev.Source})

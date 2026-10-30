@@ -142,7 +142,7 @@ func run(configPath string) error {
 	// targets unless explicitly allowed in config.
 	allowPrivate := cfg.Security.AllowPrivateWebhookTargets
 	httpClient := providers.NewGuardedClient(cfg.Delivery.SendTimeout.D(), allowPrivate)
-	registry := providers.NewDefault(httpClient, allowPrivate)
+	registry := providers.NewDefault(httpClient, allowPrivate, providers.WithMessageStore(store))
 
 	n := notifier.New(store, registry, m, clk, log, notifier.Config{
 		Workers:               cfg.Delivery.Workers,

@@ -216,6 +216,11 @@
       secret: "Bot token", fields: [
         { key: "chat_id", required: true },
         { key: "parse_mode", type: "select", options: ["", "Markdown", "HTML"] },
+        { key: "message_thread_id", type: "number", placeholder: "forum topic ID" },
+        { key: "silent_severities", placeholder: "comma-separated, e.g. info,debug" },
+        { key: "media_hosts", advanced: true, placeholder: "comma-separated hosts to fetch and upload from" },
+        { key: "callback_hosts", advanced: true, placeholder: "comma-separated hosts buttons may call" },
+        { key: "callback_user_ids", advanced: true, placeholder: "comma-separated Telegram user IDs" },
         { key: "api_base", advanced: true, placeholder: "https://api.telegram.org" },
       ],
     },

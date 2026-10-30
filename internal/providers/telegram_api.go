@@ -52,42 +52,96 @@ func (a tgAPI) call(ctx context.Context, method string, payload, result any) err
 // do posts body to method. A 2xx answer is success; its result is decoded only
 // when result is not nil (so a bare 200 from a stub still counts as sent).
 func (a tgAPI) do(ctx context.Context, method, contentType string, body io.Reader, result any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.base+"/"+method, body)
-	if err != nil {
-		return fmt.Errorf("telegram %s: build request", method)
-	}
-	req.Header.Set("Content-Type", contentType)
-	resp, err := a.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("telegram %s: %w", method, withoutURL(err))
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		return fmt.Errorf("telegram %s: read answer: %w", method, withoutURL(err))
-	}
-	var env tgEnvelope
-	decodeErr := json.Unmarshal(raw, &env)
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		desc := env.Description
-		if decodeErr != nil {
-			desc = strings.TrimSpace(string(raw[:min(len(raw), 512)]))
-		}
-		return &tgError{Method: method, Status: resp.StatusCode, Description: desc}
-	}
-	if result == nil {
-		return nil
+	env, status, decodeErr, err := a.roundTrip(ctx, method, contentType, body)
+	if err != nil || result == nil {
+		return err
 	}
 	if decodeErr != nil {
 		return fmt.Errorf("telegram %s: decode answer: %w", method, decodeErr)
 	}
 	if !env.OK {
-		return &tgError{Method: method, Status: resp.StatusCode, Description: env.Description}
+		return &tgError{Method: method, Status: status, Description: env.Description}
 	}
 	if err := json.Unmarshal(env.Result, result); err != nil {
 		return fmt.Errorf("telegram %s: decode result: %w", method, err)
 	}
 	return nil
+}
+
+// sent posts a send or edit method and returns the IDs of the messages it
+// produced (one, or an album's). Like do, any 2xx answer is success: an answer
+// without message IDs gives none rather than an error, since the message went
+// out either way.
+func (a tgAPI) sent(ctx context.Context, method, contentType string, body io.Reader) ([]int64, error) {
+	env, _, decodeErr, err := a.roundTrip(ctx, method, contentType, body)
+	if err != nil || decodeErr != nil {
+		return nil, err
+	}
+	var one tgMessage
+	if json.Unmarshal(env.Result, &one) == nil && one.MessageID != 0 {
+		return []int64{one.MessageID}, nil
+	}
+	var many []tgMessage
+	if json.Unmarshal(env.Result, &many) == nil {
+		ids := make([]int64, 0, len(many))
+		for _, m := range many {
+			ids = append(ids, m.MessageID)
+		}
+		return ids, nil
+	}
+	return nil, nil
+}
+
+// sentJSON is sent with a JSON payload.
+func (a tgAPI) sentJSON(ctx context.Context, method string, payload any) ([]int64, error) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("telegram %s: marshal: %w", method, err)
+	}
+	return a.sent(ctx, method, "application/json", bytes.NewReader(body))
+}
+
+// roundTrip posts body to method. A non-2xx answer is a *tgError; decodeErr
+// says whether a 2xx answer's body was a Bot API envelope.
+func (a tgAPI) roundTrip(ctx context.Context, method, contentType string, body io.Reader) (env tgEnvelope, status int, decodeErr, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.base+"/"+method, body)
+	if err != nil {
+		return env, 0, nil, fmt.Errorf("telegram %s: build request", method)
+	}
+	req.Header.Set("Content-Type", contentType)
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return env, 0, nil, fmt.Errorf("telegram %s: %w", method, withoutURL(err))
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return env, resp.StatusCode, nil, fmt.Errorf("telegram %s: read answer: %w", method, withoutURL(err))
+	}
+	decodeErr = json.Unmarshal(raw, &env)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		desc := env.Description
+		if decodeErr != nil {
+			desc = strings.TrimSpace(string(raw[:min(len(raw), 512)]))
+		}
+		return env, resp.StatusCode, decodeErr, &tgError{Method: method, Status: resp.StatusCode, Description: desc}
+	}
+	return env, resp.StatusCode, decodeErr, nil
+}
+
+// isRefused reports whether err is Telegram refusing the request itself (a
+// 400), as opposed to a network error, rate limit or outage.
+func isRefused(err error) bool {
+	var te *tgError
+	return errors.As(err, &te) && te.Status == http.StatusBadRequest
+}
+
+// refusalSays reports whether err is a 400 whose description contains s
+// (case-insensitive).
+func refusalSays(err error, s string) bool {
+	var te *tgError
+	return errors.As(err, &te) && te.Status == http.StatusBadRequest &&
+		strings.Contains(strings.ToLower(te.Description), s)
 }
 
 // withoutURL drops the request URL from a transport error (*url.Error), which
@@ -105,11 +159,21 @@ type tgKeyboard struct {
 	InlineKeyboard [][]tgButton `json:"inline_keyboard"`
 }
 
-// tgButton is a link button (URL) or a callback button (CallbackData).
+// tgButton is one inline keyboard button: a link (URL), a callback
+// (CallbackData), a copy button (CopyText) or a disabled one (Disabled).
 type tgButton struct {
-	Text         string `json:"text"`
-	URL          string `json:"url,omitempty"`
-	CallbackData string `json:"callback_data,omitempty"`
+	Text              string      `json:"text"`
+	URL               string      `json:"url,omitempty"`
+	CallbackData      string      `json:"callback_data,omitempty"`
+	CopyText          *tgCopyText `json:"copy_text,omitempty"`
+	Disabled          *struct{}   `json:"disabled,omitempty"`
+	Style             string      `json:"style,omitempty"`
+	IconCustomEmojiID string      `json:"icon_custom_emoji_id,omitempty"`
+}
+
+// tgCopyText is a CopyTextButton.
+type tgCopyText struct {
+	Text string `json:"text"`
 }
 
 type tgUpdate struct {

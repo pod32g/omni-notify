@@ -73,6 +73,7 @@ func (s *Store) migrate() error {
 	adds := []struct{ table, col, ddl string }{
 		{"routes", "priority", "ALTER TABLE routes ADD COLUMN priority INTEGER NOT NULL DEFAULT 0"},
 		{"routes", "stop_processing", "ALTER TABLE routes ADD COLUMN stop_processing INTEGER NOT NULL DEFAULT 0"},
+		{"events", "message", "ALTER TABLE events ADD COLUMN message TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, a := range adds {
 		has, err := s.columnExists(a.table, a.col)

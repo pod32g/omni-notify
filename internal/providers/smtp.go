@@ -4,9 +4,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
+	"mime"
+	"mime/multipart"
+	"mime/quotedprintable"
 	"net"
 	"net/smtp"
+	"net/textproto"
 	"strings"
 	"text/template"
 	"time"
@@ -135,8 +140,8 @@ func (p *smtpProvider) dial(ctx context.Context, addr string, tlsConfig *tls.Con
 
 func (p *smtpProvider) buildMessage(msg models.NotificationMessage) []byte {
 	ev := msg.Event
-	subject := subjectLine(ev)
-	if p.subjectTmpl != nil {
+	subject := headline(ev)
+	if p.subjectTmpl != nil && (ev.Message == nil || ev.Message.Title == "") {
 		var buf bytes.Buffer
 		if err := p.subjectTmpl.Execute(&buf, ev); err == nil {
 			subject = strings.TrimSpace(buf.String())
@@ -149,18 +154,56 @@ func (p *smtpProvider) buildMessage(msg models.NotificationMessage) []byte {
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "From: %s\r\n", sanitizeHeader(p.from))
 	fmt.Fprintf(&b, "To: %s\r\n", sanitizeHeader(strings.Join(p.to, ", ")))
-	fmt.Fprintf(&b, "Subject: %s\r\n", sanitizeHeader(subject))
+	// Encoded (RFC 2047) when it is not plain ASCII, such as an emoji.
+	fmt.Fprintf(&b, "Subject: %s\r\n", mime.QEncoding.Encode("UTF-8", sanitizeHeader(subject)))
 	fmt.Fprintf(&b, "Date: %s\r\n", time.Now().UTC().Format(time.RFC1123Z))
 	b.WriteString("MIME-Version: 1.0\r\n")
-	b.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
-	b.WriteString("\r\n")
-	body := plainBody(ev)
+	body := bodyText(ev)
 	if msg.Test {
 		body = "This is a test notification from Omni-Notify.\r\n\r\n" + body
 	}
+	if ov := overrideOf(ev, "smtp", parseSMTPOverride); ov.HTML != "" {
+		writeAlternative(&b, body, ov.HTML)
+		return b.Bytes()
+	}
+	b.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
+	b.WriteString("\r\n")
 	b.WriteString(strings.ReplaceAll(body, "\n", "\r\n"))
 	b.WriteString("\r\n")
 	return b.Bytes()
+}
+
+// smtpOverride is an event's message.smtp: an HTML version of the email, sent
+// beside the plain text (message.text or the default layout) as
+// multipart/alternative.
+type smtpOverride struct {
+	HTML string `json:"html,omitempty"`
+}
+
+func parseSMTPOverride(raw json.RawMessage) (smtpOverride, error) {
+	var ov smtpOverride
+	err := decodeOverride(raw, &ov)
+	return ov, err
+}
+
+// writeAlternative writes a multipart/alternative body: the text, then the
+// HTML, both quoted-printable (an HTML line may be longer than SMTP allows).
+func writeAlternative(b *bytes.Buffer, text, html string) {
+	w := multipart.NewWriter(b)
+	fmt.Fprintf(b, "Content-Type: multipart/alternative; boundary=%q\r\n\r\n", w.Boundary())
+	for _, part := range []struct{ kind, body string }{{"text/plain", text}, {"text/html", html}} {
+		pw, err := w.CreatePart(textproto.MIMEHeader{
+			"Content-Type":              {part.kind + "; charset=UTF-8"},
+			"Content-Transfer-Encoding": {"quoted-printable"},
+		})
+		if err != nil {
+			return
+		}
+		qp := quotedprintable.NewWriter(pw)
+		_, _ = qp.Write([]byte(strings.ReplaceAll(part.body, "\n", "\r\n")))
+		_ = qp.Close()
+	}
+	_ = w.Close()
 }
 
 // sanitizeHeader strips CR/LF to prevent header injection via event content.

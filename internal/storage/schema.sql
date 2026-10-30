@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS events (
     timestamp   TEXT NOT NULL,
     fingerprint TEXT NOT NULL,
     raw_payload TEXT NOT NULL DEFAULT '{}',
-    received_at TEXT NOT NULL
+    received_at TEXT NOT NULL,
+    message     TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_events_fingerprint ON events(fingerprint);
 CREATE INDEX IF NOT EXISTS idx_events_received_at ON events(received_at);
@@ -90,3 +91,18 @@ CREATE TABLE IF NOT EXISTS deliveries (
 );
 CREATE INDEX IF NOT EXISTS idx_deliveries_queue       ON deliveries(status, next_attempt_at);
 CREATE INDEX IF NOT EXISTS idx_deliveries_fingerprint ON deliveries(fingerprint);
+
+-- Messages providers sent, by the producer's name for them (ref), so a later
+-- event can edit, reply to, pin, unpin, react to or delete them. Rows older
+-- than 30 days are pruned as new ones are written.
+CREATE TABLE IF NOT EXISTS sent_messages (
+    channel    TEXT NOT NULL,
+    account    TEXT NOT NULL,
+    chat       TEXT NOT NULL,
+    ref        TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    kind       TEXT NOT NULL DEFAULT '',
+    sent_at    TEXT NOT NULL,
+    PRIMARY KEY (channel, account, chat, ref)
+);
+CREATE INDEX IF NOT EXISTS idx_sent_messages_sent_at ON sent_messages(sent_at);

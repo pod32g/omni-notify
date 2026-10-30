@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/pod32g/omni-notify/internal/models"
+	"github.com/pod32g/omni-notify/internal/providers"
 	"github.com/pod32g/omni-notify/internal/storage"
 )
 
@@ -32,6 +33,10 @@ func (s *Server) handleCreateEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	ev.Normalize() // migrate legacy status values before validation
 	if err := ev.Validate(); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := providers.ValidateMessage(ev.Message); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}

@@ -32,11 +32,11 @@ func (s *Store) InsertEvent(ctx context.Context, ev models.Event, raw []byte) (m
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO events (event_id, type, source, status, severity, title, summary,
 		                    description, labels, annotations, timestamp, fingerprint,
-		                    raw_payload, received_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		                    raw_payload, received_at, message)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		ev.EventID, ev.Type, ev.Source, string(ev.Status), string(ev.Severity), ev.Title,
 		ev.Summary, ev.Description, mustJSONMap(ev.Labels), mustJSONMap(ev.Annotations),
-		fmtTime(ev.Timestamp), ev.Fingerprint, string(raw), fmtTime(received),
+		fmtTime(ev.Timestamp), ev.Fingerprint, string(raw), fmtTime(received), messageJSON(ev.Message),
 	)
 	if err != nil {
 		return models.StoredEvent{}, fmt.Errorf("insert event: %w", err)
@@ -108,7 +108,7 @@ func (s *Store) ListEvents(ctx context.Context, f EventFilter) ([]models.StoredE
 }
 
 const selectEventCols = `SELECT id, event_id, type, source, status, severity, title,
-	summary, description, labels, annotations, timestamp, fingerprint, received_at`
+	summary, description, labels, annotations, timestamp, fingerprint, received_at, message`
 
 // scanner abstracts *sql.Row and *sql.Rows for shared scanning.
 type scanner interface {
@@ -120,10 +120,10 @@ func scanEvent(sc scanner) (models.StoredEvent, error) {
 		ev                          models.StoredEvent
 		status, severity            string
 		labelsJSON, annotationsJSON string
-		tsStr, recvStr              string
+		tsStr, recvStr, msgJSON     string
 	)
 	err := sc.Scan(&ev.ID, &ev.EventID, &ev.Type, &ev.Source, &status, &severity, &ev.Title,
-		&ev.Summary, &ev.Description, &labelsJSON, &annotationsJSON, &tsStr, &ev.Fingerprint, &recvStr)
+		&ev.Summary, &ev.Description, &labelsJSON, &annotationsJSON, &tsStr, &ev.Fingerprint, &recvStr, &msgJSON)
 	if err != nil {
 		return models.StoredEvent{}, err
 	}
@@ -133,7 +133,31 @@ func scanEvent(sc scanner) (models.StoredEvent, error) {
 	ev.Annotations = parseJSONMap(annotationsJSON)
 	ev.Timestamp = parseTime(tsStr)
 	ev.ReceivedAt = parseTime(recvStr)
+	ev.Message = parseMessage(msgJSON)
 	return ev, nil
+}
+
+// messageJSON stores an event's message; "" when it has none.
+func messageJSON(m *models.Message) string {
+	if m == nil {
+		return ""
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+func parseMessage(s string) *models.Message {
+	if s == "" {
+		return nil
+	}
+	var m models.Message
+	if err := json.Unmarshal([]byte(s), &m); err != nil {
+		return nil
+	}
+	return &m
 }
 
 func mustJSONMap(m map[string]string) string {

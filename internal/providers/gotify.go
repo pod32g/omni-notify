@@ -2,8 +2,8 @@ package providers
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -45,21 +45,41 @@ func newGotify(client *http.Client, cfg map[string]any, secret string, allowPriv
 }
 
 type gotifyPayload struct {
-	Title    string `json:"title"`
-	Message  string `json:"message"`
-	Priority int    `json:"priority"`
+	Title    string         `json:"title"`
+	Message  string         `json:"message"`
+	Priority int            `json:"priority"`
+	Extras   map[string]any `json:"extras,omitempty"`
 }
 
 func (g *gotify) Send(ctx context.Context, msg models.NotificationMessage) error {
-	payload := gotifyPayload{
-		Title:    subjectLine(msg.Event),
-		Message:  plainBody(msg.Event),
+	plain := gotifyPayload{
+		Title:    headline(msg.Event),
+		Message:  bodyText(msg.Event),
 		Priority: g.priority,
 	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("gotify: marshal: %w", err)
-	}
 	headers := map[string]string{"X-Gotify-Key": sanitizeHeader(g.token)}
-	return postBytes(ctx, g.client, http.MethodPost, g.url, "application/json", body, headers)
+	ov := overrideOf(msg.Event, "gotify", parseGotifyOverride)
+	if isEmptyOverride(ov) {
+		_, err := sendJSON(ctx, g.client, http.MethodPost, g.url, plain, headers)
+		return err
+	}
+	rich := plain
+	if ov.Title != "" {
+		rich.Title = ov.Title
+	}
+	if ov.Message != "" {
+		rich.Message = ov.Message
+	}
+	if ov.Priority != nil {
+		rich.Priority = *ov.Priority
+	}
+	if extras := ov.extras(); len(extras) > 0 {
+		rich.Extras = extras
+	}
+	_, err := sendJSON(ctx, g.client, http.MethodPost, g.url, rich, headers)
+	if isPayloadRefused(err) {
+		slog.Warn("gotify: sending the plain message instead", "err", err)
+		_, err = sendJSON(ctx, g.client, http.MethodPost, g.url, plain, headers)
+	}
+	return err
 }

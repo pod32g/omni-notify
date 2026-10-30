@@ -72,17 +72,42 @@ func (r *Registry) Build(kind string, cfg map[string]any, secret string) (Provid
 	return c(cfg, secret)
 }
 
+// MessageStore remembers sent messages by ref, so a later event can edit,
+// reply to, pin or react to them. *storage.Store satisfies it.
+type MessageStore interface {
+	PutSentMessage(ctx context.Context, m models.SentMessage) error
+	GetSentMessage(ctx context.Context, channel, account, chat, ref string) (models.SentMessage, error)
+	DeleteSentMessage(ctx context.Context, channel, account, chat, ref string) error
+}
+
+// Option configures NewDefault.
+type Option func(*options)
+
+type options struct {
+	messages MessageStore
+}
+
+// WithMessageStore lets providers remember the messages they send by ref.
+// Without it, refs (edit, reply_to, pin, ...) do nothing.
+func WithMessageStore(s MessageStore) Option {
+	return func(o *options) { o.messages = s }
+}
+
 // NewDefault returns a registry with all built-in providers registered, sharing
 // httpClient for the HTTP-based providers. If httpClient is nil a guarded client
 // honouring allowPrivate is created. allowPrivate also controls build-time
 // rejection of literal private/loopback target hosts.
-func NewDefault(httpClient *http.Client, allowPrivate bool) *Registry {
+func NewDefault(httpClient *http.Client, allowPrivate bool, opts ...Option) *Registry {
 	if httpClient == nil {
 		httpClient = NewGuardedClient(15*time.Second, allowPrivate)
 	}
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
 	r := NewRegistry()
 	r.Register("discord", func(cfg map[string]any, secret string) (Provider, error) {
-		return newDiscord(httpClient, cfg, secret, allowPrivate)
+		return newDiscord(httpClient, cfg, secret, allowPrivate, o.messages)
 	})
 	r.Register("slack", func(cfg map[string]any, secret string) (Provider, error) {
 		return newSlack(httpClient, cfg, secret, allowPrivate)
@@ -94,7 +119,7 @@ func NewDefault(httpClient *http.Client, allowPrivate bool) *Registry {
 		return newSMTP(cfg, secret)
 	})
 	r.Register("telegram", func(cfg map[string]any, secret string) (Provider, error) {
-		return newTelegram(httpClient, cfg, secret, allowPrivate)
+		return newTelegram(httpClient, cfg, secret, allowPrivate, o.messages)
 	})
 	r.Register("ntfy", func(cfg map[string]any, secret string) (Provider, error) {
 		return newNtfy(httpClient, cfg, secret, allowPrivate)
@@ -109,7 +134,7 @@ func NewDefault(httpClient *http.Client, allowPrivate bool) *Registry {
 		return newTeams(httpClient, cfg, secret, allowPrivate)
 	})
 	r.Register("matrix", func(cfg map[string]any, secret string) (Provider, error) {
-		return newMatrix(httpClient, cfg, secret, allowPrivate)
+		return newMatrix(httpClient, cfg, secret, allowPrivate, o.messages)
 	})
 	r.Register("pagerduty", func(cfg map[string]any, secret string) (Provider, error) {
 		return newPagerDuty(httpClient, cfg, secret, allowPrivate)

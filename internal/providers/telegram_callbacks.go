@@ -39,10 +39,21 @@ func callbackKey(token string) []byte {
 	return sum[:]
 }
 
+// Callback data versions: what a button's index points into.
+const (
+	callbackAnnotation = "c1" // the event's callbacks annotation
+	callbackMessage    = "c2" // the callback buttons of its message.telegram
+)
+
 // signCallback returns callback_data for entry index of the stored event's
 // callbacks annotation: "c1:<event>:<index>:<mac>", at most 50 bytes.
 func signCallback(key []byte, chatID string, eventRef int64, index int) string {
-	body := fmt.Sprintf("c1:%d:%d", eventRef, index)
+	return signCallbackV(key, chatID, callbackAnnotation, eventRef, index)
+}
+
+// signCallbackV returns callback_data of a version: "<v>:<event>:<index>:<mac>".
+func signCallbackV(key []byte, chatID, version string, eventRef int64, index int) string {
+	body := fmt.Sprintf("%s:%d:%d", version, eventRef, index)
 	return body + ":" + callbackMAC(key, chatID, body)
 }
 
@@ -54,20 +65,30 @@ func callbackMAC(key []byte, chatID, body string) string {
 
 // parseCallback verifies data signed by signCallback for chatID.
 func parseCallback(key []byte, chatID, data string) (eventRef int64, index int, ok bool) {
-	parts := strings.Split(data, ":")
-	if len(parts) != 4 || parts[0] != "c1" {
+	version, eventRef, index, ok := parseCallbackV(key, chatID, data)
+	if version != callbackAnnotation {
 		return 0, 0, false
 	}
+	return eventRef, index, ok
+}
+
+// parseCallbackV verifies data signed by signCallbackV for chatID.
+func parseCallbackV(key []byte, chatID, data string) (version string, eventRef int64, index int, ok bool) {
+	parts := strings.Split(data, ":")
+	if len(parts) != 4 || (parts[0] != callbackAnnotation && parts[0] != callbackMessage) {
+		return "", 0, 0, false
+	}
+	version, eventRef, index, ok = parts[0], 0, 0, false
 	body := strings.Join(parts[:3], ":")
 	if !hmac.Equal([]byte(parts[3]), []byte(callbackMAC(key, chatID, body))) {
-		return 0, 0, false
+		return "", 0, 0, false
 	}
 	eventRef, err1 := strconv.ParseInt(parts[1], 10, 64)
 	index, err2 := strconv.Atoi(parts[2])
 	if err1 != nil || err2 != nil || eventRef <= 0 || index < 0 {
-		return 0, 0, false
+		return "", 0, 0, false
 	}
-	return eventRef, index, true
+	return version, eventRef, index, true
 }
 
 // CallbackStore is what the callback service reads: the providers (each bot's
@@ -335,7 +356,7 @@ func (c *TelegramCallbacks) resolve(ctx context.Context, b bot, cq tgCallbackQue
 	if len(s.callbackUsers) > 0 && !s.callbackUsers[cq.From.ID] {
 		return callbackAction{}, "You can't use these buttons."
 	}
-	eventRef, index, ok := parseCallback(callbackKey(s.token), s.chatID, cq.Data)
+	version, eventRef, index, ok := parseCallbackV(callbackKey(s.token), s.chatID, cq.Data)
 	if !ok {
 		return callbackAction{}, stale
 	}
@@ -347,6 +368,14 @@ func (c *TelegramCallbacks) resolve(ctx context.Context, b bot, cq tgCallbackQue
 		return callbackAction{}, "This button has expired."
 	}
 	links := parseLinks(ev.Annotations["callbacks"])
+	if version == callbackMessage {
+		links = nil
+		if ov, err := parseTelegramOverride(ev.Message.Channel(telegramChannel)); err == nil {
+			for _, b := range ov.callbackSpecs() {
+				links = append(links, msgLink{Label: b.Text, URL: b.CallbackURL})
+			}
+		}
+	}
 	if index >= len(links) {
 		return callbackAction{}, stale
 	}

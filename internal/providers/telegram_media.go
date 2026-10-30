@@ -1,15 +1,14 @@
 package providers
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"mime/multipart"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -105,37 +104,32 @@ func isWebURL(raw string) bool {
 	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }
 
-// sendPhoto fetches the image and sends it with the caption and buttons.
-func (t *telegram) sendPhoto(ctx context.Context, imageURL, caption string, markup *tgKeyboard) error {
-	img, filename, err := t.fetchImage(ctx, imageURL)
-	if err != nil {
-		return err
-	}
-	var body bytes.Buffer
-	w := multipart.NewWriter(&body)
-	_ = w.WriteField("chat_id", t.settings.chatID)
-	_ = w.WriteField("caption", caption)
-	if t.settings.parseMode != "" {
-		_ = w.WriteField("parse_mode", t.settings.parseMode)
-	}
-	if markup != nil {
-		b, err := json.Marshal(markup)
-		if err != nil {
-			return fmt.Errorf("telegram sendPhoto: marshal buttons: %w", err)
+// mediaInput is how a media item is given to Telegram: a file_id or a URL as
+// is, or, for a URL on media_hosts, the file itself, fetched here and uploaded
+// under field. uploadOnly items not on media_hosts are refused.
+func (t *telegram) mediaInput(ctx context.Context, item tgMediaItem, field string) (string, *tgUpload, error) {
+	raw := strings.TrimSpace(item.URL)
+	if isFileID(raw) {
+		if item.uploadOnly {
+			return "", nil, fmt.Errorf("image_url %q is not a URL", raw)
 		}
-		_ = w.WriteField("reply_markup", string(b))
+		return raw, nil, nil
 	}
-	part, err := w.CreateFormFile("photo", filename)
+	u, err := url.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("telegram sendPhoto: %w", err)
+		return "", nil, fmt.Errorf("media url %q: %w", raw, err)
 	}
-	if _, err := part.Write(img); err != nil {
-		return fmt.Errorf("telegram sendPhoto: %w", err)
+	if !t.settings.mediaHosts.allowsURL(u) {
+		if item.uploadOnly || !isWebURL(raw) {
+			return "", nil, fmt.Errorf("media url %q is not on an allowed host", raw)
+		}
+		return raw, nil, nil // Telegram fetches it
 	}
-	if err := w.Close(); err != nil {
-		return fmt.Errorf("telegram sendPhoto: %w", err)
+	data, filename, err := t.fetchMedia(ctx, u, item.Type)
+	if err != nil {
+		return "", nil, err
 	}
-	return t.api.do(ctx, "sendPhoto", w.FormDataContentType(), &body, nil)
+	return "", &tgUpload{field: field, filename: filename, data: data}, nil
 }
 
 // photoTypes are the sniffed image types Telegram takes as a photo, with the
@@ -146,16 +140,12 @@ var photoTypes = map[string]string{
 	"image/webp": "image.webp",
 }
 
-// fetchImage downloads imageURL when it is http(s) on an allowed host,
-// following redirects only to allowed hosts, and returns at most
-// image_max_bytes of a JPEG, PNG or WebP image (judged by its bytes).
-func (t *telegram) fetchImage(ctx context.Context, imageURL string) ([]byte, string, error) {
-	u, err := url.Parse(strings.TrimSpace(imageURL))
-	if err != nil || !t.settings.imageHosts.allowsURL(u) {
-		return nil, "", fmt.Errorf("image_url %q is not on an allowed host", imageURL)
-	}
+// fetchMedia downloads u, which is on media_hosts, following redirects only
+// to allowed hosts. A photo must be at most image_max_bytes of JPEG, PNG or
+// WebP (judged by its bytes); anything else at most media_max_bytes.
+func (t *telegram) fetchMedia(ctx context.Context, u *url.URL, kind string) ([]byte, string, error) {
 	if err := validateHTTPURL(u.String(), t.allowPrivate); err != nil {
-		return nil, "", fmt.Errorf("image_url: %w", err)
+		return nil, "", fmt.Errorf("media url: %w", err)
 	}
 	ctx, cancel := context.WithTimeout(ctx, imageFetchTimeout)
 	defer cancel()
@@ -165,39 +155,60 @@ func (t *telegram) fetchImage(ctx context.Context, imageURL string) ([]byte, str
 		if len(via) >= 3 {
 			return errors.New("too many redirects")
 		}
-		if !t.settings.imageHosts.allowsURL(req.URL) {
+		if !t.settings.mediaHosts.allowsURL(req.URL) {
 			return fmt.Errorf("redirect to host %q is not allowed", req.URL.Hostname())
 		}
 		return nil
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return nil, "", fmt.Errorf("image_url: %w", err)
+		return nil, "", fmt.Errorf("media url: %w", err)
 	}
-	req.Header.Set("Accept", "image/jpeg, image/png, image/webp")
+	limit := t.settings.mediaMaxBytes
+	if kind == "photo" {
+		limit = t.settings.imageMaxBytes
+		req.Header.Set("Accept", "image/jpeg, image/png, image/webp")
+	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, "", fmt.Errorf("fetch image: %w", err)
+		return nil, "", fmt.Errorf("fetch %s: %w", kind, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("fetch image: status %d", resp.StatusCode)
+		return nil, "", fmt.Errorf("fetch %s: status %d", kind, resp.StatusCode)
 	}
-	limit := t.settings.imageMaxBytes
 	if resp.ContentLength > limit {
-		return nil, "", fmt.Errorf("fetch image: %d bytes is over the %d-byte limit", resp.ContentLength, limit)
+		return nil, "", fmt.Errorf("fetch %s: %d bytes is over the %d-byte limit", kind, resp.ContentLength, limit)
 	}
-	img, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
-		return nil, "", fmt.Errorf("fetch image: %w", err)
+		return nil, "", fmt.Errorf("fetch %s: %w", kind, err)
 	}
-	if int64(len(img)) > limit {
-		return nil, "", fmt.Errorf("fetch image: over the %d-byte limit", limit)
+	if int64(len(data)) > limit {
+		return nil, "", fmt.Errorf("fetch %s: over the %d-byte limit", kind, limit)
 	}
-	kind := http.DetectContentType(img)
-	filename, ok := photoTypes[kind]
+	if kind != "photo" {
+		return data, mediaFilename(u, kind), nil
+	}
+	sniffed := http.DetectContentType(data)
+	filename, ok := photoTypes[sniffed]
 	if !ok {
-		return nil, "", fmt.Errorf("fetch image: %s is not a JPEG, PNG or WebP image", kind)
+		return nil, "", fmt.Errorf("fetch photo: %s is not a JPEG, PNG or WebP image", sniffed)
 	}
-	return img, filename, nil
+	return data, filename, nil
+}
+
+// mediaFilename names an uploaded file after its URL's last path element
+// (Telegram shows a document's name), else after its kind.
+func mediaFilename(u *url.URL, kind string) string {
+	name := path.Base(u.Path)
+	if name == "." || name == "/" || name == "" {
+		return kind
+	}
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == '"' || r == '\\' {
+			return '_'
+		}
+		return r
+	}, name)
 }

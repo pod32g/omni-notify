@@ -22,14 +22,18 @@ func TestNewTelegramSend(t *testing.T) {
 		"parse_mode": "Markdown",
 		"api_base":   srv.URL,
 	}
-	p, err := newTelegram(srv.Client(), cfg, "bot-token", true)
+	p, err := newTelegram(srv.Client(), cfg, "bot-token", true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := p.Send(context.Background(), models.NotificationMessage{Event: testEvent()}); err != nil {
 		t.Fatal(err)
 	}
-	var payload telegramPayload
+	var payload struct {
+		ChatID    string `json:"chat_id"`
+		Text      string `json:"text"`
+		ParseMode string `json:"parse_mode"`
+	}
 	if err := json.Unmarshal(*body, &payload); err != nil {
 		t.Fatalf("invalid telegram payload: %v\n%s", err, *body)
 	}
@@ -57,7 +61,7 @@ func TestNewTelegramRequestPath(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	cfg := map[string]any{"chat_id": "9", "api_base": srv.URL}
-	p, err := newTelegram(srv.Client(), cfg, "tok123", true)
+	p, err := newTelegram(srv.Client(), cfg, "tok123", true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,11 +78,11 @@ func TestNewTelegramRequestPath(t *testing.T) {
 
 func TestNewTelegramRequiresFields(t *testing.T) {
 	// Missing chat_id.
-	if _, err := newTelegram(http.DefaultClient, map[string]any{}, "tok", true); err == nil {
+	if _, err := newTelegram(http.DefaultClient, map[string]any{}, "tok", true, nil); err == nil {
 		t.Fatal("expected error for missing chat_id")
 	}
 	// Missing secret (bot token).
-	if _, err := newTelegram(http.DefaultClient, map[string]any{"chat_id": "1"}, "", true); err == nil {
+	if _, err := newTelegram(http.DefaultClient, map[string]any{"chat_id": "1"}, "", true, nil); err == nil {
 		t.Fatal("expected error for missing bot token")
 	}
 }
@@ -101,7 +105,7 @@ func newTestTelegram(t *testing.T, f *fakeTelegram, cfg map[string]any) *telegra
 	}
 	cfg["chat_id"] = "777"
 	cfg["api_base"] = f.srv.URL
-	p, err := newTelegram(f.srv.Client(), cfg, "tok123", true)
+	p, err := newTelegram(f.srv.Client(), cfg, "tok123", true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +186,7 @@ func TestTelegramPhotoFallsBackToText(t *testing.T) {
 		handler http.HandlerFunc
 		cfg     map[string]any
 		refuse  bool   // Telegram refuses the sendPhoto
-		wantErr string // why fetchImage fails
+		wantErr string // why fetching the photo fails
 	}{
 		{name: "not found", wantErr: "status 404", handler: func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) }},
 		{name: "not an image", wantErr: "not a JPEG, PNG or WebP", handler: func(w http.ResponseWriter, r *http.Request) {
@@ -215,9 +219,9 @@ func TestTelegramPhotoFallsBackToText(t *testing.T) {
 			}
 			p := newTestTelegram(t, f, cfg)
 			if tc.wantErr != "" {
-				_, _, err := p.fetchImage(context.Background(), imgSrv.URL+"/p.png")
+				_, _, err := p.mediaInput(context.Background(), tgMediaItem{tgMediaSpec: tgMediaSpec{Type: "photo", URL: imgSrv.URL + "/p.png"}}, "photo")
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-					t.Fatalf("fetchImage error %v, want %q", err, tc.wantErr)
+					t.Fatalf("mediaInput error %v, want %q", err, tc.wantErr)
 				}
 			}
 			if err := p.Send(context.Background(), models.NotificationMessage{Event: mediaEvent(imgSrv.URL + "/p.png")}); err != nil {
@@ -380,7 +384,7 @@ func TestTelegramErrorsHideTheToken(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	base := srv.URL
 	srv.Close() // connection refused from now on
-	p, err := newTelegram(http.DefaultClient, map[string]any{"chat_id": "1", "api_base": base}, "secret-token-123", true)
+	p, err := newTelegram(http.DefaultClient, map[string]any{"chat_id": "1", "api_base": base}, "secret-token-123", true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,7 +408,7 @@ func TestTelegramSettingsValidation(t *testing.T) {
 		for k, v := range extra {
 			cfg[k] = v
 		}
-		if _, err := newTelegram(http.DefaultClient, cfg, "tok", true); err == nil {
+		if _, err := newTelegram(http.DefaultClient, cfg, "tok", true, nil); err == nil {
 			t.Errorf("config %v accepted", extra)
 		}
 	}

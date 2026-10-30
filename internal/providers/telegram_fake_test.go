@@ -31,8 +31,9 @@ type tgCall struct {
 	Token    string
 	JSON     map[string]any    // a JSON body
 	Form     map[string]string // a multipart body's fields
-	File     []byte            // a multipart body's photo
+	File     []byte            // a multipart body's (first) file
 	FileName string
+	Files    map[string][]byte // every file, by field name
 }
 
 func newFakeTelegram(t *testing.T) *fakeTelegram {
@@ -56,8 +57,12 @@ func newFakeTelegram(t *testing.T) *fakeTelegram {
 					break
 				}
 				b, _ := io.ReadAll(part)
-				if part.FormName() == "photo" {
-					c.File, c.FileName = b, part.FileName()
+				if part.FileName() != "" {
+					if c.Files == nil {
+						c.File, c.FileName = b, part.FileName()
+						c.Files = map[string][]byte{}
+					}
+					c.Files[part.FormName()] = b
 				} else {
 					c.Form[part.FormName()] = string(b)
 				}
