@@ -326,6 +326,14 @@ unless `metrics_require_auth: true`.
 | `opsgenie`   | API key           | — (firing→create, resolved→close, keyed by fingerprint) |
 | `googlechat` | webhook URL       | —                                                   |
 | `twilio`     | auth token        | `account_sid` (req), `from` (req), `to` (req)       |
+| `apns`       | .p8 key from Apple | `team_id`, `key_id`, `topic` (the app's bundle id), all req³ |
+
+³ `apns` sends Apple alert pushes to the devices an event names in its `apns_tokens`
+annotation (`<development|production>:<hex token>`, comma-separated), with `apns_category`,
+`apns_thread_id`, `apns_interruption_level`, `apns_collapse_id` and `apns_data` (a JSON object
+beside `aps`). Notify keeps no device list: the on-call plugin is the producer that knows whose
+phones to ring (docs/plugins/oncall.md). A token Apple says is gone is skipped; the delivery fails
+only when no device got it.
 
 Providers that talk to a fixed SaaS endpoint also accept an override config key
 (`api_base` / `api_url` / `events_url`) — handy for self-hosted/proxied instances.

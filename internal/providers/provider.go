@@ -148,5 +148,9 @@ func NewDefault(httpClient *http.Client, allowPrivate bool, opts ...Option) *Reg
 	r.Register("twilio", func(cfg map[string]any, secret string) (Provider, error) {
 		return newTwilio(httpClient, cfg, secret, allowPrivate)
 	})
+	// Its own HTTP/2 client: Apple requires HTTP/2, and its hosts are fixed.
+	r.Register("apns", func(cfg map[string]any, secret string) (Provider, error) {
+		return newAPNS(cfg, secret, allowPrivate)
+	})
 	return r
 }

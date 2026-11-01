@@ -1,7 +1,7 @@
 # The on-call plugin
 
 **Status:** on `main` since 2026-10-29, off by default; on at chizu with an owner-only starter
-directory. Sign-in with Omni Identity added 2026-10-30.
+directory. Sign-in with Omni Identity added 2026-10-30; push to the app 2026-10-31.
 **Client:** the Omni On-Call iOS app (`omni-notify-ios`), whose contract is its
 `docs/oncall/API.md`.
 
@@ -48,6 +48,8 @@ plugins:
     enabled: true
     storage: {path: /data/oncall.db}
     escalation_delay: 5m          # a level's default wait before the next level
+    push:                         # page people's phones too (optional)
+      provider: oncall-push       # a Notify provider of kind apns
     identity:                     # sign-in with Omni Identity (optional)
       issuer: https://identity.omni.pod32g.dev
       audiences: [omni_vy47oxmf]  # the Omni Access gateway's client id
@@ -84,6 +86,8 @@ plugins:
 
 providers:
   - {name: oncall-jellyfin, kind: oncall, config: {service: svc_jellyfin}}
+  - {name: oncall-push, kind: apns, secret: "<the .p8>",
+     config: {team_id: LVZHYJD66T, key_id: <key id>, topic: dev.pod32g.OmniNotify}}
 
 routes:
   - {name: jellyfin-to-oncall, match: {labels.service: jellyfin}, providers: [oncall-jellyfin]}
@@ -119,6 +123,27 @@ start. Incidents, overrides, the timeline and the feed live in the plugin's data
   incident, and `GET /changes?since=` gives a cursor. A timeline names "you" per viewer, and a page
   with no contact methods says "Not paged: no contact methods" instead of pretending.
 
+## Push to the Omni On-Call app
+
+Each phone registers its APNs token with the plugin (`PUT /devices/{id}`, below). A page to its
+person then also goes, as its own Omni-Notify delivery, through the provider `push.provider`
+names (kind `apns`, README "Providers"), next to the person's `contacts`. A phone alone counts as
+a contact method. The page carries:
+- the alert: the page's title (`SEV1 · jellyfin: …`) and summary (`#12 · level 1. Escalates in
+  10 min unless acknowledged.`);
+- `category: INCIDENT_TRIGGERED` (the app's Acknowledge, Resolve and Open), time-sensitive, threaded and
+  collapsed by incident;
+- data: `incident_id`, `incident_version`, `status`, `severity`, `service`, `sent_at`, never the
+  incident's state as fact (the app fetches it).
+
+The timeline says "Sent through … and the Omni On-Call app". Like any delivery, that means queued:
+Notify's deliveries show whether Apple took it. A token Apple says is gone is skipped; a phone that
+reinstalls registers its new token, and a token registered from another phone or account moves
+there.
+
+Development builds register `environment: development` (APNs sandbox); the provider sends each
+token to its own environment.
+
 ## API
 
 `/oncall/api/v1/…` as in the app's `docs/oncall/API.md`:
@@ -126,7 +151,10 @@ start. Incidents, overrides, the timeline and the feed live in the plugin's data
 - `incidents` (list, create, get, `timeline`, and `acknowledge`, `resolve`, `reassign`,
   `escalate`, `notes`);
 - `oncalls`, `schedules` (list, get, `overrides`);
-- `escalation_policies`, `services`, `activity`, `changes`.
+- `escalation_policies`, `services`, `activity`, `changes`;
+- `devices`: `GET` (yours), `PUT /devices/{id}` `{platform: "ios", token: "<hex>", environment:
+  "development"|"production", name}` (registers or refreshes; answers whether push is set up),
+  `DELETE /devices/{id}`.
 
 `/me` includes `server: {kind: "omni-notify"}` so the app can tell it from the development
 stand-in.
@@ -155,8 +183,7 @@ containers resolve with a public resolver, so `docker-compose.yml` gives Notify 
 
 ## Not yet
 
-- Push to the app. An APNs alert provider in Notify is still missing; today pages go through
-  whatever providers a person lists (Telegram, ntfy, Pushover, …).
+- Pushes for anything but a page (an acknowledgement elsewhere, a resolve, a shift reminder).
 - Shift swaps (`request_swaps` is never granted), service health from omni-metrics (`health` is
   empty), editing the directory through the API, and Telegram buttons that acknowledge.
 

@@ -65,6 +65,15 @@ CREATE TABLE IF NOT EXISTS meta (
 	key   TEXT PRIMARY KEY,
 	value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS devices (
+	id          TEXT PRIMARY KEY,
+	user_id     TEXT NOT NULL,
+	token       TEXT NOT NULL,
+	environment TEXT NOT NULL,
+	name        TEXT NOT NULL,
+	updated_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS devices_user ON devices(user_id);
 `
 
 type store struct{ db *sql.DB }

@@ -23,7 +23,12 @@ type Config struct {
 	// one is paged, when the level doesn't say.
 	EscalationDelay models.Duration `yaml:"escalation_delay"`
 	// Identity, when set, lets people sign in with Omni Identity.
-	Identity           IdentityConfig   `yaml:"identity"`
+	Identity IdentityConfig `yaml:"identity"`
+	// Push, when set, pages people's registered phones too (devices.go).
+	Push struct {
+		// Provider is the Notify provider (kind apns) that sends to the app.
+		Provider string `yaml:"provider"`
+	} `yaml:"push"`
 	Users              []UserConfig     `yaml:"users"`
 	Teams              []TeamConfig     `yaml:"teams"`
 	Schedules          []ScheduleConfig `yaml:"schedules"`

@@ -125,6 +125,7 @@ routes:
 #   oncall:
 #     enabled: true
 #     storage: {path: "./oncall.db"}
+#     push: {provider: oncall-push}  # page registered phones through this apns provider (optional)
 #     identity:                     # sign-in with Omni Identity (optional)
 #       issuer: "https://identity.example"
 #       audiences: ["<Omni Access gateway client id>"]

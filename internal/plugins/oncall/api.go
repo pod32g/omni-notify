@@ -39,6 +39,9 @@ func (p *Plugin) Handler() http.Handler {
 	h("GET /api/v1/services/{id}", p.getService)
 	h("GET /api/v1/activity", p.listActivity)
 	h("GET /api/v1/changes", p.getChanges)
+	h("GET /api/v1/devices", p.listDevices)
+	h("PUT /api/v1/devices/{id}", p.putDevice)
+	h("DELETE /api/v1/devices/{id}", p.deleteDevice)
 	return mux
 }
 

@@ -58,6 +58,11 @@ plugins:
     enabled: true
     storage:
       path: "/data/oncall.db"
+    # Pages also go to the phones people registered in the Omni On-Call app,
+    # through this Notify provider (kind apns, created with the API: it holds
+    # the .p8). Until it exists, a push page says "Not sent" in the timeline.
+    push:
+      provider: oncall-push
     # Sign-in with Omni Identity. The Omni On-Call app reuses the phone's Omni
     # Access sign-in, whose tokens are for the Access gateway (its client id).
     identity:

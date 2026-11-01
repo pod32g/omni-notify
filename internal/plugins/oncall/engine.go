@@ -348,7 +348,15 @@ func (p *Plugin) page(ctx context.Context, inc *incident, userID string, now tim
 		inc.Paged = append(inc.Paged, userID)
 	}
 	per := p.dir.users[userID]
-	if per == nil || len(per.contacts) == 0 {
+	var phones []device
+	if p.cfg.Push.Provider != "" {
+		ds, err := p.db.devices(ctx, userID)
+		if err != nil {
+			p.log.Warn("page: devices", "user", userID, "err", err)
+		}
+		phones = ds
+	}
+	if per == nil || (len(per.contacts) == 0 && len(phones) == 0) {
 		return p.record(ctx, inc, event{At: now, Kind: "notified", Subject: userID, Detail: "Not paged: no contact methods"})
 	}
 	svc := p.serviceRef(inc.ServiceID)
@@ -373,13 +381,41 @@ func (p *Plugin) page(ctx context.Context, inc *incident, userID string, now tim
 		},
 		Timestamp: now,
 	}
-	channel := strings.Join(per.contacts, ", ")
-	detail := "Sent through " + channel
-	if err := p.host.Deliver(ctx, ev, "oncall", per.contacts); err != nil {
-		p.log.Warn("page not sent", "incident", inc.ID, "user", userID, "err", err)
-		detail = "Not sent: " + err.Error()
+	var sent, failed []string
+	if len(per.contacts) > 0 {
+		channel := strings.Join(per.contacts, ", ")
+		if err := p.host.Deliver(ctx, ev, "oncall", per.contacts); err != nil {
+			p.log.Warn("page not sent", "incident", inc.ID, "user", userID, "err", err)
+			failed = append(failed, channel+": "+err.Error())
+		} else {
+			sent = append(sent, channel)
+		}
 	}
-	return p.record(ctx, inc, event{At: now, Kind: "notified", Subject: userID, Detail: detail, Channel: channel})
+	if len(phones) > 0 {
+		push := ev
+		push.EventID += "-push"
+		push.Annotations = map[string]string{}
+		for k, v := range ev.Annotations {
+			push.Annotations[k] = v
+		}
+		for k, v := range pushAnnotations(inc, svc, phones, now) {
+			push.Annotations[k] = v
+		}
+		if err := p.host.Deliver(ctx, push, "oncall", []string{p.cfg.Push.Provider}); err != nil {
+			p.log.Warn("page push not sent", "incident", inc.ID, "user", userID, "err", err)
+			failed = append(failed, devicesLabel(len(phones))+": "+err.Error())
+		} else {
+			sent = append(sent, devicesLabel(len(phones)))
+		}
+	}
+	detail := "Sent through " + strings.Join(sent, " and ")
+	switch {
+	case len(sent) == 0:
+		detail = "Not sent: " + strings.Join(failed, "; ")
+	case len(failed) > 0:
+		detail += ". Not sent: " + strings.Join(failed, "; ")
+	}
+	return p.record(ctx, inc, event{At: now, Kind: "notified", Subject: userID, Detail: detail, Channel: strings.Join(sent, ", ")})
 }
 
 func notifySeverity(sev string) models.Severity {
