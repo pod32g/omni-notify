@@ -103,3 +103,6 @@ plugins:
       - {id: svc_notify, name: omni-notify, description: "Notification delivery.", escalation_policy: ep_omni}
       - {id: svc_metrics, name: omni-metrics, description: "Metrics and alert rules.", escalation_policy: ep_omni}
       - {id: svc_logging, name: omni-logging, description: "Log collection and search.", escalation_policy: ep_omni}
+      # fansly-api's alerts (storage, logins, recorder drain and build) reach it
+      # through provider oncall-fansly, routed on labels.service=fansly.
+      - {id: svc_fansly, name: fansly, description: "Stream recorder: storage, logins and the recorder.", escalation_policy: ep_omni}
