@@ -498,6 +498,15 @@ call is held back, the answer explains why:
 
 Agent and device credentials reach only these endpoints.
 
+**The phone door.** `voice.phone_addr` starts a second listener with only what a call in
+progress needs: `GET /api/v1/calls/{id}`, `POST …/state` and `POST …/turns`. It admits a
+phone's device credential and nothing else. A locked iPhone can't sign in to Omni Access, so
+on chizu the door (`:8082`) is published by the gateway as a public name,
+`calls.omni.pod32g.dev` (LAN and tailnet only, like every `*.omni.pod32g.dev`), and phones
+learn it as `call_url` from `GET /api/v1/devices/self`. Everything else stays behind the
+gateway's sign-in. `voice.apns.provider` names the apns provider whose key VoIP pushes use
+(on chizu, the On-Call app's `oncall-push`).
+
 Routed events can ring too: a `voice_call` provider (`config: {recipient, agent}`) in
 any route turns the event into a call.
 

@@ -111,6 +111,22 @@ Snoozes and reschedules the user speaks on a call are user-requested by construc
 
 ## Status (2026-10-26)
 
+### Live on chizu (2026-11-02 UTC)
+
+- Deployed from main 649e4a2 and 4421dad:
+  - VoIP pushes use the On-Call app's APNs key through `voice.apns.provider: oncall-push`.
+  - The phone door is `calls.omni.pod32g.dev` → `omni-notify:8082`. It is a public route in
+    Omni Access's live service list.
+  - Claude has a static agent token, kept on the owner's Mac.
+- **Verified on Suzuka:**
+  - It enrolled through the gateway.
+  - A locked phone rang from the push (Apple took it in 0.17–0.31 s).
+  - It was answered on the lock screen. Gobbie spoke 0.6 s after the answer, and "OK" was
+    stored as acknowledged.
+  - Every request of the call went through the door.
+- **Before the door:** a call answered on a locked phone hung up, because Omni Access's
+  sign-in can't make a token until the phone is unlocked.
+
 ### The phone's Calls tab (2026-11-01)
 
 The On-Call app's Calls tab (omni-notify-ios `docs/calls/API.md`) is served here:
