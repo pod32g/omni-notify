@@ -33,6 +33,7 @@ func sha(s string) string {
 
 type voiceEnv struct {
 	ts    *httptest.Server
+	phone *httptest.Server // the phone door (PhoneHandler)
 	svc   *voice.Service
 	clk   *clock.Fake
 	store *storage.Store
@@ -80,7 +81,9 @@ voice:
 	srv := api.NewServer(store, n, reg, m, promReg, nil, api.Config{Tokens: []string{token}, MaxBodyBytes: 1 << 20, Voice: svc})
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
-	return &voiceEnv{ts: ts, svc: svc, clk: clk, store: store}
+	phone := httptest.NewServer(srv.PhoneHandler())
+	t.Cleanup(phone.Close)
+	return &voiceEnv{ts: ts, phone: phone, svc: svc, clk: clk, store: store}
 }
 
 func (e *voiceEnv) do(t *testing.T, method, path, bearer, body string) (int, map[string]any) {
@@ -365,5 +368,61 @@ func TestVoiceAPICallsTab(t *testing.T) {
 	}
 	if code, _ := callBack(`{}`, "k4"); code != 400 {
 		t.Fatalf("no call: %d", code)
+	}
+}
+
+// The phone door: a call in progress for a phone's credential, and nothing
+// else for anyone.
+func TestVoicePhoneDoor(t *testing.T) {
+	e := newVoiceServer(t)
+	dev := e.enroll(t)
+	code, b := e.do(t, "POST", "/api/v1/calls", claudeToken, `{"recipient":"me","message":"Ping."}`)
+	if code != 201 {
+		t.Fatalf("create: %d %v", code, b)
+	}
+	id := b["call"].(map[string]any)["id"].(string)
+	e.svc.Tick(context.Background())
+
+	door := func(method, path, bearer, body string) (int, map[string]any) {
+		t.Helper()
+		req, _ := http.NewRequest(method, e.phone.URL+path, strings.NewReader(body))
+		if bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		resp, err := e.phone.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		return resp.StatusCode, out
+	}
+	if code, b := door("GET", "/api/v1/calls/"+id, dev, ""); code != 200 || b["id"] != id {
+		t.Fatalf("device load: %d %v", code, b)
+	}
+	for _, st := range []string{`{"state":"answered"}`, `{"state":"active"}`} {
+		if code, b := door("POST", "/api/v1/calls/"+id+"/state", dev, st); code != 200 {
+			t.Fatalf("%s: %d %v", st, code, b)
+		}
+	}
+	if code, b := door("POST", "/api/v1/calls/"+id+"/turns", dev, `{"seq":1,"transcript":"okay"}`); code != 200 {
+		t.Fatalf("turn: %d %v", code, b)
+	}
+	// Admin and agent tokens don't open it, nor does nothing.
+	for _, tok := range []string{token, claudeToken, ""} {
+		if code, _ := door("GET", "/api/v1/calls/"+id, tok, ""); code != http.StatusUnauthorized {
+			t.Errorf("token %q…: %d, want 401", tok[:min(4, len(tok))], code)
+		}
+	}
+	// Nothing else is there, even for a phone.
+	for _, p := range [][2]string{{"POST", "/api/v1/calls"}, {"GET", "/api/v1/devices/self/calls"}, {"GET", "/api/v1/events"},
+		{"GET", "/api/v1/devices/self"}, {"POST", "/api/v1/devices/enrollments"}} {
+		if code, _ := door(p[0], p[1], dev, `{}`); code != http.StatusNotFound && code != http.StatusMethodNotAllowed {
+			t.Errorf("%s %s on the door: %d", p[0], p[1], code)
+		}
+	}
+	if code, _ := door("GET", "/healthz", "", ""); code != 200 {
+		t.Errorf("healthz: %d", code)
 	}
 }

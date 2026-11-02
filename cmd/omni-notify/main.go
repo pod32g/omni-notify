@@ -236,8 +236,20 @@ func run(configPath string) error {
 		Plugins:            pluginHandlers,
 	})
 
-	serverErr := make(chan error, 1)
+	serverErr := make(chan error, 2)
 	go func() { serverErr <- srv.ListenAndServe() }()
+
+	// The phone door: only a call in progress, only device credentials.
+	var phoneSrv *http.Server
+	if voiceSvc != nil && cfg.Voice.PhoneAddr != "" {
+		phoneSrv = srv.PhoneServer(cfg.Voice.PhoneAddr)
+		go func() {
+			log.Info("phone door listening", "addr", cfg.Voice.PhoneAddr, "url", cfg.Voice.PhoneURL)
+			if err := phoneSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				serverErr <- err
+			}
+		}()
+	}
 
 	// Wait for signal or server error.
 	sig := make(chan os.Signal, 1)
@@ -257,6 +269,11 @@ func run(configPath string) error {
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Warn("http shutdown", "err", err)
+	}
+	if phoneSrv != nil {
+		if err := phoneSrv.Shutdown(shutdownCtx); err != nil {
+			log.Warn("phone door shutdown", "err", err)
+		}
 	}
 	stopEngines()
 	<-callbacksDone

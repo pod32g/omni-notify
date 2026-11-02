@@ -52,6 +52,12 @@ log:
 voice:
   enabled: true
   store_transcripts: true
+  # The phone door: a call in progress (load it, report its state, take turns)
+  # on its own port, device credentials only. Omni Access publishes it as a
+  # public name, because a locked phone can't sign in to Omni Access. All the
+  # rest of Notify stays behind the gateway's sign-in.
+  phone_addr: ":8082"
+  phone_url: "https://calls.omni.pod32g.dev"
   apns:
     provider: oncall-push
   agents:

@@ -91,13 +91,18 @@ func (s *Server) handleGetSelf(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "device credential required")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	body := map[string]any{
 		"device":       p.device,
 		"push":         s.cfg.Voice.PushConfigured(),
 		"ring_seconds": int(s.cfg.Voice.Config().DeviceRingTimeout.D().Seconds()),
 		// What this server does for the phone's Calls tab.
 		"calls": map[string]bool{"history": true, "call_back": true},
-	})
+	}
+	// Where a call in progress goes: the phone door, which a locked phone can reach.
+	if u := s.cfg.Voice.Config().PhoneURL; u != "" {
+		body["call_url"] = u
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 func (s *Server) handlePutSelf(w http.ResponseWriter, r *http.Request) {

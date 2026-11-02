@@ -31,6 +31,14 @@ type VoiceConfig struct {
 	// StoreTranscripts keeps what the user said on calls. Off by default:
 	// only the interpreted intent is stored.
 	StoreTranscripts bool `yaml:"store_transcripts"`
+	// PhoneAddr is a second listener, the phone door, that serves only what a
+	// call in progress needs (load the call, report its state, take turns) and
+	// accepts only device credentials. It is meant to be published without
+	// Omni Access's sign-in, which a locked phone can't do. Empty: no door.
+	PhoneAddr string `yaml:"phone_addr"`
+	// PhoneURL is where phones reach the door; GET /api/v1/devices/self tells
+	// them as call_url.
+	PhoneURL string `yaml:"phone_url"`
 
 	APNS     APNSConfig     `yaml:"apns"`
 	Identity IdentityConfig `yaml:"identity"`
@@ -191,6 +199,9 @@ func (v *VoiceConfig) validate() error {
 	}
 	if v.DeviceRingTimeout > v.RingTimeout {
 		return fmt.Errorf("voice.device_ring_timeout must not exceed voice.ring_timeout")
+	}
+	if v.PhoneURL != "" && (v.PhoneAddr == "" || !strings.HasPrefix(v.PhoneURL, "https://")) {
+		return fmt.Errorf("voice.phone_url needs voice.phone_addr and an https:// address")
 	}
 	if v.APNS.Provider != "" && (v.APNS.KeyID != "" || v.APNS.KeyPath != "" || v.APNS.Key != "") {
 		return fmt.Errorf("voice.apns: use provider or key_id/key, not both")

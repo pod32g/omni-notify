@@ -30,6 +30,9 @@ services:
     # publishing. The sidecar takes over host port 8088.
     expose:
       - "8080"
+      # The phone door (voice.phone_addr): the Omni Access gateway, on this
+      # Compose network, publishes it as calls.omni.pod32g.dev.
+      - "8082"
     # chizu's own resolver is public, so containers can't resolve the homelab
     # names. The on-call plugin checks sign-ins against Omni Identity
     # (identity.omni.pod32g.dev): ask the Pi-hole first, as Omni Access does.

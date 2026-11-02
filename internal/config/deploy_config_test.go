@@ -12,7 +12,8 @@ func TestDeployConfigLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !c.Voice.Enabled || c.Voice.APNS.Provider != "oncall-push" || len(c.Voice.Users) != 1 {
+	if !c.Voice.Enabled || c.Voice.APNS.Provider != "oncall-push" || len(c.Voice.Users) != 1 ||
+		c.Voice.PhoneAddr != ":8082" || c.Voice.PhoneURL != "https://calls.omni.pod32g.dev" {
 		t.Fatalf("voice = %+v", c.Voice)
 	}
 }
