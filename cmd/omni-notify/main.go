@@ -179,7 +179,7 @@ func run(configPath string) error {
 		verifier *auth.Verifier
 	)
 	if cfg.Voice.Enabled {
-		voiceSvc, verifier, err = newVoice(cfg, store, m, n, registry, log)
+		voiceSvc, verifier, err = newVoice(ctx, cfg, store, m, n, registry, log)
 		if err != nil {
 			return err
 		}
@@ -267,16 +267,33 @@ func run(configPath string) error {
 // newVoice builds the VOICE_CALL service: the APNs pusher (or none, so phones
 // poll), the Identity verifier for agent tokens, and the voice_call provider
 // kind that lets routes deliver events by phone.
-func newVoice(cfg config.Config, store *storage.Store, m *metrics.Metrics, n *notifier.Notifier,
+func newVoice(ctx context.Context, cfg config.Config, store *storage.Store, m *metrics.Metrics, n *notifier.Notifier,
 	registry *providers.Registry, log *slog.Logger) (*voice.Service, *auth.Verifier, error) {
 	vc := cfg.Voice
-	var pusher voice.Pusher
-	if vc.APNS.Configured() {
-		a, err := voice.NewAPNS(vc.APNS, nil)
+	apnsCfg := vc.APNS
+	if apnsCfg.Provider != "" {
+		// The key lives in an apns provider made through the admin API. If it is
+		// missing, calls still work by polling rather than Notify failing to start.
+		p, err := store.GetProvider(ctx, apnsCfg.Provider)
+		if err == nil {
+			apnsCfg, err = voice.APNSFromProvider(p)
+		}
 		if err != nil {
+			log.Error("voice: no APNs from provider; calls wait for phones to poll", "provider", vc.APNS.Provider, "err", err)
+			apnsCfg = config.APNSConfig{}
+		}
+	}
+	var pusher voice.Pusher
+	if apnsCfg.Configured() {
+		a, err := voice.NewAPNS(apnsCfg, nil)
+		switch {
+		case err == nil:
+			pusher = a
+		case vc.APNS.Provider != "":
+			log.Error("voice: the provider's APNs key is unusable; calls wait for phones to poll", "provider", vc.APNS.Provider, "err", err)
+		default:
 			return nil, nil, err
 		}
-		pusher = a
 	} else {
 		log.Warn("voice: APNs is not configured; calls wait for phones to poll (development only)")
 	}

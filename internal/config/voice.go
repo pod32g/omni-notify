@@ -39,12 +39,17 @@ type VoiceConfig struct {
 }
 
 // APNSConfig holds the token-based (.p8) APNs credentials used for VoIP pushes.
-// When KeyID is empty no push is sent and devices must poll (development).
+// When neither KeyID nor Provider is set no push is sent and devices must poll
+// (development).
 type APNSConfig struct {
-	KeyID   string `yaml:"key_id"`
-	TeamID  string `yaml:"team_id"`
-	KeyPath string `yaml:"key_path"` // PEM .p8 file
-	Key     string `yaml:"key"`      // or the PEM itself (${ENV})
+	// Provider names a Notify provider of kind apns (the on-call app's push)
+	// whose key, key id, team and topic to use, so the .p8 stays in one place,
+	// encrypted in Notify's database. Instead of the fields below.
+	Provider string `yaml:"provider"`
+	KeyID    string `yaml:"key_id"`
+	TeamID   string `yaml:"team_id"`
+	KeyPath  string `yaml:"key_path"` // PEM .p8 file
+	Key      string `yaml:"key"`      // or the PEM itself (${ENV})
 	// Topic is the app's bundle id; ".voip" is appended for VoIP pushes.
 	Topic string `yaml:"topic"`
 	// DevelopmentURL / ProductionURL override the APNs hosts (tests).
@@ -53,7 +58,7 @@ type APNSConfig struct {
 }
 
 // Configured reports whether VoIP pushes can be sent.
-func (a APNSConfig) Configured() bool { return a.KeyID != "" }
+func (a APNSConfig) Configured() bool { return a.KeyID != "" || a.Provider != "" }
 
 // IdentityConfig points at the Omni-Identity issuer whose client_credentials
 // tokens identify agents.
@@ -187,7 +192,10 @@ func (v *VoiceConfig) validate() error {
 	if v.DeviceRingTimeout > v.RingTimeout {
 		return fmt.Errorf("voice.device_ring_timeout must not exceed voice.ring_timeout")
 	}
-	if v.APNS.Configured() {
+	if v.APNS.Provider != "" && (v.APNS.KeyID != "" || v.APNS.KeyPath != "" || v.APNS.Key != "") {
+		return fmt.Errorf("voice.apns: use provider or key_id/key, not both")
+	}
+	if v.APNS.KeyID != "" {
 		if v.APNS.TeamID == "" || v.APNS.Topic == "" {
 			return fmt.Errorf("voice.apns: team_id and topic are required with key_id")
 		}

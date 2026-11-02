@@ -147,3 +147,26 @@ func TestAPNSErrors(t *testing.T) {
 		t.Fatal("bad key accepted")
 	}
 }
+
+// VoIP pushes can borrow the on-call app's apns provider: its key (as stored,
+// folded onto one line), key id, team and topic.
+func TestAPNSFromProvider(t *testing.T) {
+	_, pemKey := testKey(t)
+	folded := strings.Join(strings.Fields(pemKey), " ")
+	p := models.ProviderConfig{Name: "oncall-push", Kind: "apns", Secret: folded,
+		Config: map[string]any{"key_id": "PW83YK4JCT", "team_id": "LVZHYJD66T", "topic": "dev.pod32g.OmniNotify"}}
+	c, err := APNSFromProvider(p)
+	if err != nil || c.KeyID != "PW83YK4JCT" || c.TeamID != "LVZHYJD66T" || c.Topic != "dev.pod32g.OmniNotify" {
+		t.Fatalf("config = %+v, %v", c, err)
+	}
+	if _, err := NewAPNS(c, nil); err != nil {
+		t.Fatalf("folded key: %v", err)
+	}
+	if _, err := APNSFromProvider(models.ProviderConfig{Name: "tg", Kind: "telegram"}); err == nil {
+		t.Fatal("a telegram provider was accepted")
+	}
+	p.Secret = ""
+	if _, err := APNSFromProvider(p); err == nil {
+		t.Fatal("a provider without its key was accepted")
+	}
+}

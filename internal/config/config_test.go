@@ -154,3 +154,16 @@ log: {forward: {enabled: true, endpoint: "http://x:8080/api/v1/ingest"}}
 		t.Error("expected error when forward enabled without api_key")
 	}
 }
+
+// Voice pushes either borrow an apns provider or carry their own key, not both.
+func TestVoiceAPNSFromProvider(t *testing.T) {
+	base := "security: {tokens: [t]}\nvoice:\n  enabled: true\n  agents: [{id: claude, display_name: Claude}]\n" +
+		"  users: [{id: me, timezone: America/Mexico_City, allowed_agents: [claude]}]\n"
+	c, err := Parse([]byte(base + "  apns: {provider: oncall-push}\n"))
+	if err != nil || !c.Voice.APNS.Configured() || c.Voice.APNS.Provider != "oncall-push" {
+		t.Fatalf("provider only: %+v, %v", c.Voice.APNS, err)
+	}
+	if _, err := Parse([]byte(base + "  apns: {provider: oncall-push, key_id: K, team_id: T, topic: x, key: k}\n")); err == nil {
+		t.Fatal("provider and key together were accepted")
+	}
+}

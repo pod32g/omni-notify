@@ -99,12 +99,40 @@ func NewAPNS(cfg config.APNSConfig, client *http.Client) (*APNS, error) {
 	return a, nil
 }
 
-func parseP8(b []byte) (*ecdsa.PrivateKey, error) {
-	block, _ := pem.Decode(b)
-	if block == nil {
-		return nil, errors.New("apns key: not PEM (expected the .p8 file from Apple)")
+// APNSFromProvider takes the credentials of a Notify provider of kind apns
+// (the on-call app's push), so VoIP pushes use the same key without a second
+// copy of it. Its topic is the bundle id; Push adds ".voip".
+func APNSFromProvider(p models.ProviderConfig) (config.APNSConfig, error) {
+	if p.Kind != "apns" {
+		return config.APNSConfig{}, fmt.Errorf("provider %s is %s, not apns", p.Name, p.Kind)
 	}
-	k, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	str := func(k string) string {
+		s, _ := p.Config[k].(string)
+		return strings.TrimSpace(s)
+	}
+	c := config.APNSConfig{KeyID: str("key_id"), TeamID: str("team_id"), Topic: str("topic"), Key: p.Secret}
+	if c.KeyID == "" || c.TeamID == "" || c.Topic == "" || c.Key == "" {
+		return config.APNSConfig{}, fmt.Errorf("provider %s lacks its key_id, team_id, topic or key", p.Name)
+	}
+	return c, nil
+}
+
+// parseP8 reads Apple's .p8: PEM, or the same folded onto one line or bare,
+// as the apns provider accepts it.
+func parseP8(b []byte) (*ecdsa.PrivateKey, error) {
+	var der []byte
+	if block, _ := pem.Decode(b); block != nil {
+		der = block.Bytes
+	} else {
+		body := strings.NewReplacer("-----BEGIN PRIVATE KEY-----", "", "-----END PRIVATE KEY-----", "").Replace(string(b))
+		body = strings.Join(strings.Fields(body), "")
+		d, err := base64.StdEncoding.DecodeString(body)
+		if err != nil || body == "" {
+			return nil, errors.New("apns key: not PEM (expected the .p8 file from Apple)")
+		}
+		der = d
+	}
+	k, err := x509.ParsePKCS8PrivateKey(der)
 	if err != nil {
 		return nil, fmt.Errorf("apns key: %w", err)
 	}

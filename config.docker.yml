@@ -44,6 +44,38 @@ log:
     api_key: "${OMNI_LOGGING_API_KEY}"
     service: "omni-notify"
 
+# Voice calls: Gobbie rings the owner's iPhone (the Omni On-Call app) through
+# CallKit, from a VoIP push. The push uses the on-call app's APNs key: the
+# oncall-push provider (made with the admin API), so the .p8 exists once.
+# Phones reach the device API through Omni Access (notify.omni.pod32g.dev).
+# Transcripts are kept so the app's call history can show what was said.
+voice:
+  enabled: true
+  store_transcripts: true
+  apns:
+    provider: oncall-push
+  agents:
+    # Claude (Claude Code, `omni-notify call` / MCP): a static token whose
+    # SHA-256 is below; the token is on the owner's Mac.
+    - id: claude
+      display_name: Claude
+      token_sha256: ["e441f10a4b037528e27840653fc663c4996701edfe9304c70119ff9991bf73c8"]
+      allow_test: true
+      may_override_quiet_hours_for_user_reminders: true
+    # On-call pages, once a voice_call provider is in someone's contacts.
+    - id: omni-oncall
+      display_name: Omni On-Call
+      may_override_quiet_hours_when_critical: true
+      actions: [acknowledge]
+  users:
+    - id: pod32g
+      aliases: [me]
+      timezone: America/Mexico_City
+      allowed_agents: [claude, omni-oncall]
+      rate_limit: {max_calls_per_hour: 6, cooldown: 1m}
+      retry: {max_attempts: 2, delay: 2m}
+      max_snooze: 12h
+
 # The on-call plugin (docs/plugins/oncall.md): incidents, schedules and
 # escalation for the Omni On-Call app, served at /oncall/api/v1. The phone
 # reaches it through Omni Access (notify.omni.pod32g.dev, an enrolled device's
