@@ -65,12 +65,22 @@ func (t *twilio) Send(ctx context.Context, msg models.NotificationMessage) error
 	if ev.Summary != "" {
 		body += "\n" + ev.Summary
 	}
+	if ev.Message.Custom() {
+		body = ev.Message.Text
+	}
 	body = truncate(body, 1500)
+	ov := overrideOf(ev, "twilio", parseTwilioOverride)
+	if ov.Body != "" {
+		body = ov.Body
+	}
 
 	form := url.Values{}
 	form.Set("From", t.from)
 	form.Set("To", t.to)
 	form.Set("Body", body)
+	for _, u := range ov.MediaURL {
+		form.Add("MediaUrl", u)
+	}
 
 	headers := map[string]string{
 		"Authorization": sanitizeHeader(t.authHeader),

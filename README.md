@@ -18,7 +18,9 @@ or contain business logic. It is a router and delivery engine.
   `annotations.<k>`, plus a default-route fallback
 - **One delivery per provider** even when multiple routes select it
 - Per-route deduplication windows and repeat intervals
-- Pluggable providers: **Discord**, **Slack**, **generic webhook**, **SMTP**
+- Pluggable providers: **Discord**, **Slack**, **generic webhook**, **SMTP**,
+  **Telegram** (rich: HTML, buttons, media, rich messages, edits and pins), and more
+- **Producers write their own messages** (`message`), per channel if they like
 - Async, durable delivery queue (SQLite-backed) with exponential-backoff retry
   and crash recovery
 - Bearer-token auth, request-size limits, **configurable SSRF protection** for
@@ -113,6 +115,113 @@ Response:
 | `labels`      | no       | string→string map (matchable, in fingerprint)   |
 | `annotations` | no       | string→string map (matchable)                    |
 | `fingerprint` | no       | dedup key; derived if omitted                    |
+| `message`     | no       | how the notification reads (see below); not matched or fingerprinted |
+
+### Writing the message yourself
+
+Without `message`, every provider lays the event out itself: a severity tag,
+the title, summary and description, then `Source`, `Type`, `Severity`,
+`Event ID`, `Time` and every label and annotation as `k: v` lines. With it, the
+producer decides:
+
+```json
+"message": {
+  "title": "Recording failed",
+  "text": "❌ @CatinaJacket: ffmpeg exited after 4s",
+  "telegram": { "text": "❌ <b>Recording failed</b> · @CatinaJacket", "parse_mode": "HTML" }
+}
+```
+
+| Key       | Meaning |
+|-----------|---------|
+| `text`    | the body, sent **as written** (plain text) by every provider, with no tag and no fields |
+| `title`   | the title where a channel has a slot for one (email subject, Discord/Slack/Teams title, ntfy/Gotify/Pushover title, PagerDuty/Opsgenie summary); default: the event's `title`, untagged. Channels without one (Telegram, Matrix, Google Chat, SMS) send `text` alone |
+| `<kind>`  | an override for the providers of that kind, in that channel's own terms: `telegram`, `discord`, `slack`, `teams`, `googlechat`, `ntfy`, `gotify`, `pushover`, `matrix`, `smtp`, `pagerduty`, `opsgenie`, `twilio` (below). Any other key is refused |
+
+`message` is checked on ingest: a misspelt option or an unknown channel is a
+`400`, not a missing notification. The generic `webhook` provider sends the
+whole event, `message` included.
+
+#### Telegram: `message.telegram`
+
+Every field is optional; names follow the [Bot API](https://core.telegram.org/bots/api).
+What is left out falls back to `message.text` (or the default layout), the
+annotations' photo and buttons, and the provider's config.
+
+| Field | Meaning |
+|-------|---------|
+| `text`, `parse_mode`, `entities` | the text (or caption) and its formatting: `HTML`, `MarkdownV2` or `Markdown`, or a `MessageEntity` list. HTML covers bold, italic, underline, strikethrough, spoilers, links, code, `<blockquote expandable>` and `<tg-time>` dates |
+| `rich` | an `InputRichMessage` (`markdown`, `html` or `blocks`) sent with `sendRichMessage`: headings, lists, tables, collapsible details, media. Falls back to the text if Telegram refuses it |
+| `media` | 1 item (`sendPhoto`/`sendVideo`/`sendAnimation`/`sendAudio`/`sendDocument`) or an album of 2–10: `{"type","url","caption","has_spoiler"}`. A URL on `media_hosts` is fetched and uploaded by Omni-Notify; any other URL is handed to Telegram to fetch; a non-URL is a `file_id`. Text over 1,024 characters goes out as its own message after the media, as does the text of an album with buttons |
+| `show_caption_above_media` | caption above the photo or video |
+| `buttons` | the inline keyboard, as rows: `{"text", "url"}` links, `{"text", "callback_url"}` actions Omni-Notify `POST`s when pressed (needs `callback_hosts`), `{"text", "copy_text"}` copy-to-clipboard, `{"text", "disabled": true}` labels; any can have `"style": "danger"\|"success"\|"primary"` and `icon_custom_emoji_id`. Up to 8 per row, 100 in all. Given, they replace the `actions`/`callbacks` annotations |
+| `disable_notification` | send without sound (overrides `silent_severities`) |
+| `protect_content` | no forwarding or saving |
+| `message_effect` | `fire`, `like`, `dislike`, `heart`, `party`, `poop` or an effect ID (private chats only; dropped if Telegram refuses it) |
+| `link_preview_options` | a `LinkPreviewOptions` object; default: previews off |
+| `message_thread_id` | forum topic (overrides the config's) |
+| `ref` | the name this message is remembered by, for 30 days (default: the ref it edits, else the event's fingerprint) |
+| `reply_to` | send as a reply to the message remembered as this ref |
+| `edit` | **edit** that message instead of sending one: its text (or caption) and buttons; media are not replaced. Sent as new if it can't be edited |
+| `pin` | pin the message sent or edited |
+| `unpin`, `delete` | unpin or delete the message remembered as this ref |
+| `react` | `{"emoji", "to", "is_big"}`: a reaction on `to`'s message, else the edited or replied-to one, else this one |
+| `send` | `false`: send nothing, only `unpin`, `delete` and `react` |
+
+```json
+// Firing: pinned, remembered as "pihole"
+"telegram": {"text": "🔴 <b>Pi-hole down</b>", "parse_mode": "HTML", "ref": "pihole", "pin": true,
+             "buttons": [[{"text": "Restart", "callback_url": "https://ha.lan/api/pihole/restart", "style": "danger"},
+                          {"text": "Dashboard", "url": "https://grafana.lan/d/dns"}]]}
+// Resolved: the same message turns green, is unpinned and gets a 👍
+"telegram": {"text": "✅ <b>Pi-hole back</b> after 4 min", "parse_mode": "HTML",
+             "edit": "pihole", "unpin": "pihole", "react": {"emoji": "👍"}}
+```
+
+Telegram never costs the message for a detail: formatting it can't parse is
+sent as plain text, a refused button, effect, preview, topic or reply is
+dropped, and refused media, albums and rich messages fall back to text. Pins,
+reactions and deletions are best effort (a bot needs the right to pin in a
+group), so a retry never sends a message twice.
+
+#### The other channels
+
+Each override uses its channel's API names; rich content (embeds, blocks,
+cards, actions) is passed through for the channel to check. If a channel
+refuses the rich version (400, 413 or 422), the plain one goes out instead.
+Refs (`ref`, `edit`, `reply_to`, …) behave as on Telegram where the channel can
+do them; `send: false` runs only the actions.
+
+| Kind | Fields |
+|------|--------|
+| `discord` | `content`, `embeds` (≤10), `components` (sent with `with_components=true`; non-app webhooks get non-interactive ones such as link buttons), `poll`, `allowed_mentions`, `username`, `avatar_url`, `tts`, `flags` (`suppress_embeds`, `suppress_notifications`, `is_components_v2`), `thread_id`, `thread_name`, `applied_tags`; refs: `ref`, `edit` (PATCH the message), `delete`, `send`. Without `content`/`embeds`/`components`/`poll` the default embed is kept |
+| `slack` | `text` (the notification fallback), `blocks` (Block Kit, ≤50), `attachments`, `mrkdwn`, `unfurl_links`, `unfurl_media`, `thread_ts`; `username`, `icon_emoji`, `icon_url` on legacy webhooks. Incoming webhooks return no message ID, so no edits |
+| `teams` | `card`: an Adaptive Card, sent the way Workflows webhooks take it; or `message_card`: a legacy MessageCard |
+| `googlechat` | `text`, `cardsV2`, `threadKey` (messages with one key share a thread, started if needed) |
+| `ntfy` | `title`, `message`, `markdown`, `priority` (1–5), `tags`, `click`, `attach`, `filename`, `icon`, `actions` (≤3: `view`, `broadcast`, `http`, `copy`), `delay`, `email`; published as JSON. Refs are ntfy sequence IDs (no storage): `ref`/`edit` publish under one (replacing that notification), `clear` dismisses it, `delete` deletes it |
+| `gotify` | `title`, `message`, `priority`, `markdown`, `click_url`, `big_image_url`, `intent_url`, `extras` (Gotify's message extras, passed through and winning over the shorthands) |
+| `pushover` | `title`, `message`, `html`, `monospace`, `url`, `url_title`, `priority` (-2…2; 2 needs `retry` ≥ 30 and `expire` ≤ 10800), `sound`, `device`, `ttl`, `tags` |
+| `matrix` | `body`, `formatted_body` (HTML), `msgtype` (`m.text`, `m.notice`, `m.emote`), `mentions` (`m.mentions`); refs: `ref`, `reply_to`, `thread` (a ref to thread under), `edit` (`m.replace`), `react` (`{"emoji","to"}`), `pin`, `unpin` (the room's pinned events), `delete` (redact), `send` |
+| `smtp` | `html`: an HTML version sent beside the text as `multipart/alternative` (quoted-printable). Subjects that aren't ASCII are now RFC 2047-encoded |
+| `pagerduty` | `summary`, `severity`, `component`, `group`, `class`, `custom_details`, `links`, `images`, `client`, `client_url`, `dedup_key`, `event_action` (`trigger`, `acknowledge`, `resolve`) |
+| `opsgenie` | `message`, `description`, `priority` (`P1`–`P5`), `tags`, `details`, `actions`, `entity`, `note` (also sent when closing), `user`, `responders`, `visibleTo`, `alias` |
+| `twilio` | `body`, `media_url` (≤10; makes it an MMS, fetched by Twilio) |
+
+```json
+"message": {
+  "text": "Pi-hole is down",
+  "discord": {"embeds": [{"title": "🔴 Pi-hole down", "color": 15158332, "url": "https://grafana.lan/d/dns"}], "ref": "pihole"},
+  "ntfy":    {"priority": 5, "tags": ["rotating_light"], "actions": [{"action": "view", "label": "Dashboard", "url": "https://grafana.lan/d/dns"}], "ref": "pihole"},
+  "matrix":  {"formatted_body": "🔴 <b>Pi-hole down</b>", "msgtype": "m.notice", "ref": "pihole", "pin": true}
+}
+// resolved: edit Discord's, clear ntfy's, edit and unpin Matrix's
+"message": {
+  "text": "Pi-hole is back",
+  "discord": {"embeds": [{"title": "✅ Pi-hole back", "color": 3066993}], "edit": "pihole"},
+  "ntfy":    {"send": false, "clear": "pihole"},
+  "matrix":  {"formatted_body": "✅ <b>Pi-hole back</b>", "edit": "pihole", "unpin": "pihole"}
+}
+```
 
 ## Deduplication
 
@@ -207,7 +316,7 @@ unless `metrics_require_auth: true`.
 | `slack`      | webhook URL       | `username`, `icon_emoji`                            |
 | `webhook`    | target URL¹       | `method`, `content_type`, `headers`, `template`     |
 | `smtp`       | password          | `host`, `port`, `username`, `from`, `to[]`, `tls`, `subject_template` |
-| `telegram`   | bot token         | `chat_id` (req), `parse_mode`                       |
+| `telegram`   | bot token         | `chat_id` (req), `parse_mode`, `message_thread_id`, `silent_severities`, media and buttons² |
 | `ntfy`       | topic URL         | `priority`, `tags`, `token`                         |
 | `gotify`     | app token         | `url` (req, server base), `priority`                |
 | `pushover`   | API token         | `user` (req), `priority`, `device`                  |
@@ -217,6 +326,14 @@ unless `metrics_require_auth: true`.
 | `opsgenie`   | API key           | — (firing→create, resolved→close, keyed by fingerprint) |
 | `googlechat` | webhook URL       | —                                                   |
 | `twilio`     | auth token        | `account_sid` (req), `from` (req), `to` (req)       |
+| `apns`       | .p8 key from Apple | `team_id`, `key_id`, `topic` (the app's bundle id), all req³ |
+
+³ `apns` sends Apple alert pushes to the devices an event names in its `apns_tokens`
+annotation (`<development|production>:<hex token>`, comma-separated), with `apns_category`,
+`apns_thread_id`, `apns_interruption_level`, `apns_collapse_id` and `apns_data` (a JSON object
+beside `aps`). Notify keeps no device list: the on-call plugin is the producer that knows whose
+phones to ring (docs/plugins/oncall.md). A token Apple says is gone is skipped; the delivery fails
+only when no device got it.
 
 Providers that talk to a fixed SaaS endpoint also accept an override config key
 (`api_base` / `api_url` / `events_url`) — handy for self-hosted/proxied instances.
@@ -242,6 +359,57 @@ Provider URLs must be `http`/`https`. When
 `security.allow_private_webhook_targets` is `false` (default), targets that are —
 or resolve to — loopback/private/link-local/multicast addresses are rejected
 (checked both at create time and at connection time).
+
+² **Telegram photos and buttons.** Three event annotations are rendering hints
+for Telegram (never listed in its text; other providers list them as before):
+
+| Annotation  | Value                                   | Rendered as |
+|-------------|-----------------------------------------|-------------|
+| `image_url` | an http(s) image URL                    | a photo (`sendPhoto`) with the text as its caption (cut to 1,024 characters) |
+| `actions`   | JSON list of `{"label","url"}`          | link buttons (opening one changes nothing) |
+| `callbacks` | JSON list of `{"label","url"}`          | buttons that make Omni-Notify `POST` to the URL |
+
+All of it is off until the provider's config allows it:
+
+| Config key          | Default  | Meaning |
+|---------------------|----------|---------|
+| `image_hosts`, `media_hosts` | none | hosts Omni-Notify fetches media from and uploads (for hosts Telegram can't reach); none = an `image_url` is not sent |
+| `image_max_bytes`   | 5 MiB    | largest photo uploaded (at most 10 MiB, Telegram's limit) |
+| `media_max_bytes`   | 20 MiB   | largest other media uploaded (at most 50 MiB) |
+| `message_thread_id` | none     | forum topic to post in |
+| `silent_severities` | none     | severities sent without sound, e.g. `["info","debug"]` |
+| `callback_hosts`    | none     | hosts a `callbacks` URL may be on; none = no callback buttons and no polling |
+| `callback_headers`  | none     | headers sent with every callback request |
+| `callback_user_ids` | anyone   | Telegram user IDs who may press callback buttons (anyone in the chat otherwise) |
+| `callback_ttl`      | `168h`   | how long a callback button works after its event arrived |
+
+- **Photos.** Omni-Notify fetches the image itself (5 s, the size cap, http(s)
+  only, redirects only to allowed hosts, the bytes must be JPEG, PNG or WebP)
+  and uploads it. Any failure, Telegram refusing the photo included, sends the
+  text message instead; a message Telegram refuses because of its buttons goes
+  out again without them.
+- **Callback buttons** need the stored event, so test sends never get them.
+  Their `callback_data` names the event and the entry, signed with a key derived
+  from the bot token and bound to the chat. Omni-Notify has no address Telegram
+  can reach, so it long-polls `getUpdates` (callback queries only) for every bot
+  with `callback_hosts`: that bot must have no webhook and no other `getUpdates`
+  consumer (a 409 in the log means one exists). A press is accepted only from
+  the provider's chat (and `callback_user_ids`), checked against the provider's
+  current config, answered at once, then run: `POST <url>` with no body and the
+  `callback_headers`, never following a redirect. A 2xx answer turns the button
+  into "✓ <label>"; anything else is posted as a reply to the message
+  (`{"error": "…"}` answers are quoted). Presses Telegram no longer lets
+  Omni-Notify answer (made while it was down) are not run.
+
+```sh
+# Posters, link buttons and Retry buttons for Omni-Media (PATCH merges config keys)
+curl -X PATCH http://localhost:8080/api/v1/providers/tg-home \
+  -H "Authorization: Bearer $OMNI_NOTIFY_API_TOKEN" \
+  -d '{"config":{"image_hosts":["media.omni.pod32g.dev"],
+        "callback_hosts":["media.omni.pod32g.dev"],
+        "callback_headers":{"X-Media-Request":"1"},
+        "callback_user_ids":[123456789]}}'
+```
 
 On `POST`/`PUT`/`PATCH`, a provider's secret is only changed when a non-empty
 `secret` is supplied; omit it to keep the stored one (secrets are never readable
@@ -428,6 +596,18 @@ already wire this env through; just set `OMNI_LOGGING_API_KEY` in your host `.en
 > The endpoint defaults to the host LAN IP because omni-notify's webhook SSRF guard
 > does not apply to the log shipper — it uses its own plain HTTP client so private
 > targets like `192.168.68.34` are reachable.
+
+## Plugins
+
+Optional parts of Omni-Notify that aren't delivery live behind a small seam
+(`internal/plugin`). A plugin is compiled in and **off unless its `plugins.<name>`
+config section says `enabled: true`**. It owns its own data and routes under
+`/<name>/`, and reaches the core only by adding provider kinds (so routes can send
+events to it) and by asking for deliveries through named providers.
+
+| Plugin | What it adds |
+|--------|--------------|
+| `oncall` | Incidents, on-call schedules and escalation for the Omni On-Call app: see [docs/plugins/oncall.md](docs/plugins/oncall.md) |
 
 ## Configuration
 

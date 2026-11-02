@@ -74,6 +74,7 @@ func (s *Store) migrate() error {
 		{"routes", "priority", "ALTER TABLE routes ADD COLUMN priority INTEGER NOT NULL DEFAULT 0"},
 		{"routes", "stop_processing", "ALTER TABLE routes ADD COLUMN stop_processing INTEGER NOT NULL DEFAULT 0"},
 		{"voice_calls", "incident", "ALTER TABLE voice_calls ADD COLUMN incident TEXT NOT NULL DEFAULT ''"},
+		{"events", "message", "ALTER TABLE events ADD COLUMN message TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, a := range adds {
 		has, err := s.columnExists(a.table, a.col)

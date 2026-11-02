@@ -381,3 +381,45 @@ func TestUnknownTokenRejected(t *testing.T) {
 		t.Fatalf("wrong token status = %d, want 401", resp.StatusCode)
 	}
 }
+
+func TestIngestMessage(t *testing.T) {
+	ts, store := newTestServer(t, 1<<20)
+	withMessage := func(message string) string {
+		return strings.Replace(eventBody, `"title"`, `"message":`+message+`,"title"`, 1)
+	}
+
+	ok := withMessage(`{"title":"Recording failed","text":"❌ @CatinaJacket: ffmpeg exited 1",
+		"telegram":{"text":"<b>❌ Recording failed</b>","parse_mode":"HTML","buttons":[[{"text":"Open","url":"https://fansly.com/x"}]]}}`)
+	if resp, body := do(t, ts, http.MethodPost, "/api/v1/events", ok, true); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d: %s", resp.StatusCode, body)
+	}
+	ev, err := store.GetEvent(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.Message == nil || ev.Message.Text != "❌ @CatinaJacket: ffmpeg exited 1" || ev.Message.Channel("telegram") == nil {
+		t.Fatalf("stored message %+v", ev.Message)
+	}
+	_, byID := do(t, ts, http.MethodGet, "/api/v1/events/1", "", true)
+	var got struct {
+		Message map[string]json.RawMessage `json:"message"`
+	}
+	if err := json.Unmarshal(byID, &got); err != nil {
+		t.Fatal(err)
+	}
+	var tg struct{ Text string }
+	if err := json.Unmarshal(got.Message["telegram"], &tg); err != nil || tg.Text != "<b>❌ Recording failed</b>" {
+		t.Fatalf("message not returned flat: %s", byID)
+	}
+
+	for name, message := range map[string]string{
+		"misspelt option":   `{"telegram":{"pars_mode":"HTML"}}`,
+		"unknown channel":   `{"carrier-pigeon":{"text":"x"}}`,
+		"override as value": `{"telegram":"<b>x</b>"}`,
+	} {
+		resp, body := do(t, ts, http.MethodPost, "/api/v1/events", withMessage(message), true)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%s: status = %d: %s", name, resp.StatusCode, body)
+		}
+	}
+}

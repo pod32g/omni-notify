@@ -30,6 +30,12 @@ services:
     # publishing. The sidecar takes over host port 8088.
     expose:
       - "8080"
+    # chizu's own resolver is public, so containers can't resolve the homelab
+    # names. The on-call plugin checks sign-ins against Omni Identity
+    # (identity.omni.pod32g.dev): ask the Pi-hole first, as Omni Access does.
+    dns:
+      - ${OMNI_NOTIFY_DNS:-192.168.68.35}
+      - 1.1.1.1
     volumes:
       - omni-notify-data:/data
       - ./config.docker.yml:/etc/omni-notify/config.yml:ro

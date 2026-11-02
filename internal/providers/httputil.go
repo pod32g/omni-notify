@@ -3,6 +3,8 @@ package providers
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -199,9 +201,29 @@ func cfgStringMap(cfg map[string]any, key string) map[string]string {
 // postBytes sends body to url with the given content type and headers, treating
 // any non-2xx response as an error that includes a snippet of the response body.
 func postBytes(ctx context.Context, client *http.Client, method, url, contentType string, body []byte, headers map[string]string) error {
-	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
+	_, err := doRequest(ctx, client, method, url, contentType, body, headers)
+	return err
+}
+
+// statusError is a non-2xx answer.
+type statusError struct {
+	Code    int
+	Snippet string
+}
+
+func (e *statusError) Error() string {
+	return fmt.Sprintf("unexpected status %d: %s", e.Code, e.Snippet)
+}
+
+// doRequest is postBytes returning the answer's body (at most 1 MiB).
+func doRequest(ctx context.Context, client *http.Client, method, url, contentType string, body []byte, headers map[string]string) ([]byte, error) {
+	var rd io.Reader
+	if body != nil {
+		rd = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, url, rd)
 	if err != nil {
-		return fmt.Errorf("build request: %w", err)
+		return nil, fmt.Errorf("build request: %w", err)
 	}
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
@@ -211,13 +233,38 @@ func postBytes(ctx context.Context, client *http.Client, method, url, contentTyp
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("send request: %w", err)
+		return nil, fmt.Errorf("send request: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
+		return nil, &statusError{Code: resp.StatusCode, Snippet: strings.TrimSpace(string(snippet))}
 	}
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
-	return nil
+	return io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+}
+
+// sendJSON marshals payload and sends it with doRequest.
+func sendJSON(ctx context.Context, client *http.Client, method, url string, payload any, headers map[string]string) ([]byte, error) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshal: %w", err)
+	}
+	return doRequest(ctx, client, method, url, "application/json", body, headers)
+}
+
+// isPayloadRefused reports whether the channel refused the request's content
+// (400, 413, 422), as opposed to its address, credentials or availability:
+// the cue to send a plainer version instead.
+func isPayloadRefused(err error) bool {
+	var se *statusError
+	if !errors.As(err, &se) {
+		return false
+	}
+	return se.Code == http.StatusBadRequest || se.Code == http.StatusRequestEntityTooLarge || se.Code == http.StatusUnprocessableEntity
+}
+
+// isNotFound reports whether err is a 404 answer.
+func isNotFound(err error) bool {
+	var se *statusError
+	return errors.As(err, &se) && se.Code == http.StatusNotFound
 }

@@ -2,8 +2,8 @@ package providers
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/pod32g/omni-notify/internal/models"
@@ -43,7 +43,7 @@ type teamsCard struct {
 
 func (t *teams) Send(ctx context.Context, msg models.NotificationMessage) error {
 	ev := msg.Event
-	subject := subjectLine(ev)
+	subject := headline(ev)
 	if subject == "" {
 		subject = "Notification"
 	}
@@ -53,11 +53,30 @@ func (t *teams) Send(ctx context.Context, msg models.NotificationMessage) error 
 		ThemeColor: fmt.Sprintf("%06X", statusColorHex(ev)),
 		Summary:    subject,
 		Title:      subject,
-		Text:       plainBody(ev),
+		Text:       bodyText(ev),
 	}
-	body, err := json.Marshal(card)
-	if err != nil {
-		return fmt.Errorf("teams: marshal: %w", err)
+	ov := overrideOf(ev, "teams", parseTeamsOverride)
+	var rich any
+	switch {
+	case len(ov.Card) > 0:
+		rich = map[string]any{
+			"type": "message",
+			"attachments": []map[string]any{{
+				"contentType": "application/vnd.microsoft.card.adaptive",
+				"contentUrl":  nil,
+				"content":     ov.Card,
+			}},
+		}
+	case len(ov.MessageCard) > 0:
+		rich = ov.MessageCard
+	default:
+		_, err := sendJSON(ctx, t.client, http.MethodPost, t.url, card, nil)
+		return err
 	}
-	return postBytes(ctx, t.client, http.MethodPost, t.url, "application/json", body, nil)
+	_, err := sendJSON(ctx, t.client, http.MethodPost, t.url, rich, nil)
+	if isPayloadRefused(err) {
+		slog.Warn("teams: sending the plain card instead", "err", err)
+		_, err = sendJSON(ctx, t.client, http.MethodPost, t.url, card, nil)
+	}
+	return err
 }

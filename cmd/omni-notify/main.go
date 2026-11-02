@@ -24,6 +24,7 @@ import (
 	"github.com/pod32g/omni-notify/internal/metrics"
 	"github.com/pod32g/omni-notify/internal/models"
 	"github.com/pod32g/omni-notify/internal/notifier"
+	"github.com/pod32g/omni-notify/internal/plugin"
 	"github.com/pod32g/omni-notify/internal/providers"
 	"github.com/pod32g/omni-notify/internal/storage"
 	"github.com/pod32g/omni-notify/internal/voice"
@@ -157,7 +158,7 @@ func run(configPath string) error {
 	// targets unless explicitly allowed in config.
 	allowPrivate := cfg.Security.AllowPrivateWebhookTargets
 	httpClient := providers.NewGuardedClient(cfg.Delivery.SendTimeout.D(), allowPrivate)
-	registry := providers.NewDefault(httpClient, allowPrivate)
+	registry := providers.NewDefault(httpClient, allowPrivate, providers.WithMessageStore(store))
 
 	n := notifier.New(store, registry, m, clk, log, notifier.Config{
 		Workers:               cfg.Delivery.Workers,
@@ -183,6 +184,19 @@ func run(configPath string) error {
 			return err
 		}
 	}
+	// Plugins start before deliveries, so a queued delivery to a plugin's
+	// provider kind finds it registered.
+	pluginHandlers, stopPlugins, err := startPlugins(ctx, cfg.Plugins, plugin.Host{
+		Log:          log,
+		Clock:        clk,
+		Providers:    registry,
+		Deliver:      n.Deliver,
+		IsAdminToken: plugin.TokenMatcher(cfg.Security.Tokens),
+	})
+	if err != nil {
+		return err
+	}
+	defer stopPlugins()
 
 	deliveryCtx, cancelDelivery := context.WithCancel(context.Background())
 	if err := n.Start(deliveryCtx); err != nil {
@@ -200,6 +214,15 @@ func run(configPath string) error {
 		}
 	}
 
+	// Telegram callback buttons: polls the bots of Telegram providers that have
+	// callback_hosts (none by default) and runs the buttons pressed.
+	callbacks := providers.NewTelegramCallbacks(store, allowPrivate, log)
+	callbacksDone := make(chan struct{})
+	go func() {
+		defer close(callbacksDone)
+		callbacks.Run(deliveryCtx)
+	}()
+
 	// HTTP server.
 	srv := api.NewServer(store, n, registry, m, promReg, log, api.Config{
 		Addr:               cfg.Server.Addr,
@@ -210,6 +233,7 @@ func run(configPath string) error {
 		WriteTimeout:       cfg.Server.WriteTimeout.D(),
 		Voice:              voiceSvc,
 		Identity:           verifier,
+		Plugins:            pluginHandlers,
 	})
 
 	serverErr := make(chan error, 1)
@@ -222,6 +246,7 @@ func run(configPath string) error {
 	select {
 	case err := <-serverErr:
 		stopEngines()
+		<-callbacksDone
 		return err
 	case s := <-sig:
 		log.Info("shutting down", "signal", s.String())
@@ -234,6 +259,7 @@ func run(configPath string) error {
 		log.Warn("http shutdown", "err", err)
 	}
 	stopEngines()
+	<-callbacksDone
 	log.Info("shutdown complete")
 	return nil
 }

@@ -88,6 +88,9 @@ type Event struct {
 	Annotations map[string]string `json:"annotations,omitempty"`
 	Timestamp   time.Time         `json:"timestamp"`
 	Fingerprint string            `json:"fingerprint,omitempty"`
+	// Message, when set, is how the producer wants the notification to read
+	// (see Message). It is neither matched by routes nor part of the fingerprint.
+	Message *Message `json:"message,omitempty"`
 }
 
 // Normalize applies backward-compatible migrations so that older payloads keep

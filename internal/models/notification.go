@@ -11,7 +11,8 @@ type NotificationMessage struct {
 	// Test indicates a synthetic message sent via POST /api/v1/test.
 	Test bool
 	// EventRef and DeliveryID identify the stored event and delivery (zero for
-	// test sends). Providers with their own lifecycle (voice_call) key on them.
+	// test sends). Providers with their own lifecycle (voice_call), or that act
+	// on the event later (Telegram callback buttons), key on them.
 	EventRef   int64
 	DeliveryID int64
 }

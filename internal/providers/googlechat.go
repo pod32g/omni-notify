@@ -2,9 +2,10 @@ package providers
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"net/url"
 
 	"github.com/pod32g/omni-notify/internal/models"
 )
@@ -38,10 +39,43 @@ type googleChatPayload struct {
 
 func (g *googleChat) Send(ctx context.Context, msg models.NotificationMessage) error {
 	ev := msg.Event
-	text := subjectLine(ev) + "\n" + plainBody(ev)
-	body, err := json.Marshal(googleChatPayload{Text: text})
-	if err != nil {
-		return fmt.Errorf("googlechat: marshal: %w", err)
+	plain := googleChatPayload{Text: fullText(ev, "\n")}
+	ov := overrideOf(ev, "googlechat", parseGoogleChatOverride)
+	if isEmptyOverride(ov) {
+		_, err := sendJSON(ctx, g.client, http.MethodPost, g.url, plain, nil)
+		return err
 	}
-	return postBytes(ctx, g.client, http.MethodPost, g.url, "application/json", body, nil)
+	rich := map[string]any{"text": plain.Text}
+	if ov.Text != "" {
+		rich["text"] = ov.Text
+	}
+	if len(ov.CardsV2) > 0 {
+		rich["cardsV2"] = ov.CardsV2
+		if ov.Text == "" && !ev.Message.Custom() {
+			delete(rich, "text") // the cards are the message
+		}
+	}
+	target := g.url
+	if ov.ThreadKey != "" {
+		rich["thread"] = map[string]string{"threadKey": ov.ThreadKey}
+		target = withQuery(g.url, "messageReplyOption", "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD")
+	}
+	_, err := sendJSON(ctx, g.client, http.MethodPost, target, rich, nil)
+	if isPayloadRefused(err) {
+		slog.Warn("googlechat: sending the plain message instead", "err", err)
+		_, err = sendJSON(ctx, g.client, http.MethodPost, g.url, plain, nil)
+	}
+	return err
+}
+
+// withQuery returns raw with the query parameter k set to v.
+func withQuery(raw, k, v string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	q := u.Query()
+	q.Set(k, v)
+	u.RawQuery = q.Encode()
+	return u.String()
 }

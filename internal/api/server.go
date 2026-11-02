@@ -30,6 +30,8 @@ type Config struct {
 	Voice *voice.Service
 	// Identity verifies Omni-Identity agent tokens (nil: not accepted).
 	Identity *auth.Verifier
+	// Plugins are served under /<name>/ and authenticate their own requests.
+	Plugins map[string]http.Handler
 }
 
 // Server wires the REST API to the storage, notifier and metrics layers.
@@ -143,6 +145,10 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET /api/v1/devices/self/calls", s.handleDeviceHistory)
 		mux.HandleFunc("GET /api/v1/devices/self/calls/{id}", s.handleDeviceHistoryCall)
 		mux.HandleFunc("POST /api/v1/devices/self/calls", s.handleDeviceCallBack)
+	}
+
+	for name, h := range s.cfg.Plugins {
+		mux.Handle("/"+name+"/", http.StripPrefix("/"+name, h))
 	}
 
 	// Middleware chain, outermost first.

@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -64,13 +65,56 @@ func (p *pushover) Send(ctx context.Context, msg models.NotificationMessage) err
 	form := url.Values{}
 	form.Set("token", p.token)
 	form.Set("user", p.user)
-	form.Set("title", truncate(subjectLine(ev), 250))
-	form.Set("message", truncate(plainBody(ev), 1024))
+	form.Set("title", truncate(headline(ev), 250))
+	form.Set("message", truncate(bodyText(ev), 1024))
 	if p.device != "" {
 		form.Set("device", p.device)
 	}
 	if p.hasPriority {
 		form.Set("priority", strconv.Itoa(p.priority))
 	}
+	ov := overrideOf(ev, "pushover", parsePushoverOverride)
+	if isEmptyOverride(ov) {
+		return p.post(ctx, form)
+	}
+	rich := url.Values{}
+	for k, v := range form {
+		rich[k] = v
+	}
+	set := func(k, v string) {
+		if v != "" {
+			rich.Set(k, v)
+		}
+	}
+	set("title", ov.Title)
+	set("message", ov.Message)
+	set("url", ov.URL)
+	set("url_title", ov.URLTitle)
+	set("sound", ov.Sound)
+	set("device", ov.Device)
+	set("tags", ov.Tags)
+	if ov.HTML {
+		rich.Set("html", "1")
+	}
+	if ov.Monospace {
+		rich.Set("monospace", "1")
+	}
+	if ov.Priority != nil {
+		rich.Set("priority", strconv.Itoa(*ov.Priority))
+	}
+	for k, n := range map[string]int{"retry": ov.Retry, "expire": ov.Expire, "ttl": ov.TTL} {
+		if n > 0 {
+			rich.Set(k, strconv.Itoa(n))
+		}
+	}
+	err := p.post(ctx, rich)
+	if isPayloadRefused(err) {
+		slog.Warn("pushover: sending the plain message instead", "err", err)
+		err = p.post(ctx, form)
+	}
+	return err
+}
+
+func (p *pushover) post(ctx context.Context, form url.Values) error {
 	return postBytes(ctx, p.client, http.MethodPost, p.url, "application/x-www-form-urlencoded", []byte(form.Encode()), nil)
 }

@@ -50,9 +50,24 @@ func captureServer(t *testing.T, status int) (*httptest.Server, *[]byte) {
 	return srv, &body
 }
 
+// discordPayload and slackPayload decode what the default layouts send.
+type discordPayload struct {
+	Content   string         `json:"content"`
+	Username  string         `json:"username"`
+	AvatarURL string         `json:"avatar_url"`
+	Embeds    []discordEmbed `json:"embeds"`
+}
+
+type slackPayload struct {
+	Text        string            `json:"text"`
+	Username    string            `json:"username"`
+	IconEmoji   string            `json:"icon_emoji"`
+	Attachments []slackAttachment `json:"attachments"`
+}
+
 func TestDiscordSend(t *testing.T) {
 	srv, body := captureServer(t, http.StatusNoContent)
-	p, err := newDiscord(srv.Client(), map[string]any{"username": "bot"}, srv.URL, true)
+	p, err := newDiscord(srv.Client(), map[string]any{"username": "bot"}, srv.URL, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,14 +87,14 @@ func TestDiscordSend(t *testing.T) {
 }
 
 func TestDiscordRequiresSecret(t *testing.T) {
-	if _, err := newDiscord(http.DefaultClient, nil, "", true); err == nil {
+	if _, err := newDiscord(http.DefaultClient, nil, "", true, nil); err == nil {
 		t.Fatal("expected error for missing webhook URL")
 	}
 }
 
 func TestDiscordNon2xxIsError(t *testing.T) {
 	srv, _ := captureServer(t, http.StatusInternalServerError)
-	p, _ := newDiscord(srv.Client(), nil, srv.URL, true)
+	p, _ := newDiscord(srv.Client(), nil, srv.URL, true, nil)
 	if err := p.Send(context.Background(), models.NotificationMessage{Event: testEvent()}); err == nil {
 		t.Fatal("expected error on 500 response")
 	}
@@ -177,7 +192,7 @@ func TestSMTPBuildMessageSanitizesHeaders(t *testing.T) {
 func TestProviderURLSchemeValidation(t *testing.T) {
 	bad := []string{"file:///etc/passwd", "gopher://example.com/x", "ftp://host/x", "notaurl", "https://"}
 	for _, secret := range bad {
-		if _, err := newDiscord(http.DefaultClient, nil, secret, true); err == nil {
+		if _, err := newDiscord(http.DefaultClient, nil, secret, true, nil); err == nil {
 			t.Errorf("discord accepted bad URL %q", secret)
 		}
 		if _, err := newSlack(http.DefaultClient, nil, secret, true); err == nil {
@@ -188,7 +203,7 @@ func TestProviderURLSchemeValidation(t *testing.T) {
 		}
 	}
 	for _, secret := range []string{"http://127.0.0.1:9/x", "https://example.com/hook"} {
-		if _, err := newDiscord(http.DefaultClient, nil, secret, true); err != nil {
+		if _, err := newDiscord(http.DefaultClient, nil, secret, true, nil); err != nil {
 			t.Errorf("discord rejected valid URL %q: %v", secret, err)
 		}
 	}
@@ -303,5 +318,55 @@ func TestRegistryDefault(t *testing.T) {
 	}
 	if _, err := r.Build("nope", nil, "x"); err == nil {
 		t.Fatal("expected error for unknown kind")
+	}
+}
+
+// A producer's message replaces every provider's own layout: no severity tag,
+// no "k: v" fields, the title and text as written.
+func TestProvidersSendProducerMessage(t *testing.T) {
+	ev := testEvent()
+	ev.Message = &models.Message{Title: "Pi-hole is down", Text: "DNS fails on the LAN since 20:00."}
+	msg := models.NotificationMessage{Event: ev}
+
+	if got := headline(ev); got != "Pi-hole is down" {
+		t.Fatalf("headline %q", got)
+	}
+	if got := bodyText(ev); got != "DNS fails on the LAN since 20:00." {
+		t.Fatalf("body %q", got)
+	}
+	if got := fullText(ev, "\n"); got != "DNS fails on the LAN since 20:00." {
+		t.Fatalf("full text %q", got)
+	}
+	if detailFields(ev) != nil {
+		t.Fatal("fields listed beside the producer's text")
+	}
+	noTitle := ev
+	noTitle.Message = &models.Message{Text: "x"}
+	if got := headline(noTitle); got != "Pi-hole Down" {
+		t.Fatalf("headline without a message title %q: want the event title, untagged", got)
+	}
+
+	for _, kind := range []string{"discord", "slack", "teams", "googlechat"} {
+		srv, body := captureServer(t, http.StatusOK)
+		p, err := NewDefault(srv.Client(), true).Build(kind, nil, srv.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := p.Send(context.Background(), msg); err != nil {
+			t.Fatalf("%s: %v", kind, err)
+		}
+		s := string(*body)
+		if !strings.Contains(s, "DNS fails on the LAN since 20:00.") || strings.Contains(s, "CRITICAL") || strings.Contains(s, "pihole") {
+			t.Fatalf("%s sent %s", kind, s)
+		}
+	}
+
+	sp, err := newSMTP(map[string]any{"host": "mail", "from": "a@b", "to": "c@d", "subject_template": "[{{.Severity}}] {{.Title}}"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := string(sp.(*smtpProvider).buildMessage(msg))
+	if !strings.Contains(raw, "Subject: Pi-hole is down\r\n") || !strings.Contains(raw, "DNS fails on the LAN since 20:00.") || strings.Contains(raw, "Source:") {
+		t.Fatalf("smtp message:\n%s", raw)
 	}
 }
