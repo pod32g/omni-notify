@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/pod32g/omni-notify/internal/models"
 	"github.com/pod32g/omni-notify/internal/storage"
@@ -94,6 +95,8 @@ func (s *Server) handleGetSelf(w http.ResponseWriter, r *http.Request) {
 		"device":       p.device,
 		"push":         s.cfg.Voice.PushConfigured(),
 		"ring_seconds": int(s.cfg.Voice.Config().DeviceRingTimeout.D().Seconds()),
+		// What this server does for the phone's Calls tab.
+		"calls": map[string]bool{"history": true, "call_back": true},
 	})
 }
 
@@ -137,4 +140,75 @@ func (s *Server) handleRinging(w http.ResponseWriter, r *http.Request) {
 		out = append(out, invitation{Invitation: i, ExpiresAt: i.ExpiresAt.Unix()})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"calls": out})
+}
+
+// handleDeviceHistory lists the person's calls for the phone's Calls tab.
+func (s *Server) handleDeviceHistory(w http.ResponseWriter, r *http.Request) {
+	p := principalFrom(r.Context())
+	if p.kind != principalDevice {
+		writeError(w, http.StatusForbidden, "device credential required")
+		return
+	}
+	var before time.Time
+	if b := r.URL.Query().Get("before"); b != "" {
+		t, err := time.Parse(time.RFC3339Nano, b)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "before must be an RFC 3339 time")
+			return
+		}
+		before = t
+	}
+	calls, next, err := s.cfg.Voice.DeviceHistory(r.Context(), p.device, atoiDefault(r.URL.Query().Get("limit"), 50), before)
+	if err != nil {
+		s.writeVoiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"calls": calls, "next_before": next, "as_of": time.Now().UTC()})
+}
+
+func (s *Server) handleDeviceHistoryCall(w http.ResponseWriter, r *http.Request) {
+	p := principalFrom(r.Context())
+	if p.kind != principalDevice {
+		writeError(w, http.StatusForbidden, "device credential required")
+		return
+	}
+	c, err := s.cfg.Voice.DeviceHistoryCall(r.Context(), p.device, r.PathValue("id"))
+	if err != nil {
+		s.writeVoiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
+}
+
+// handleDeviceCallBack starts a call about an earlier one from the phone.
+func (s *Server) handleDeviceCallBack(w http.ResponseWriter, r *http.Request) {
+	p := principalFrom(r.Context())
+	if p.kind != principalDevice {
+		writeError(w, http.StatusForbidden, "device credential required")
+		return
+	}
+	var req struct {
+		RegardingCall string `json:"regarding_call"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.RegardingCall == "" {
+		writeError(w, http.StatusBadRequest, "regarding_call is required")
+		return
+	}
+	v, created, err := s.cfg.Voice.CallBack(r.Context(), p.device, req.RegardingCall, r.Header.Get("Idempotency-Key"))
+	if errors.Is(err, voice.ErrState) {
+		writeError(w, http.StatusConflict, "a call to you is ringing or in progress")
+		return
+	}
+	if err != nil {
+		s.writeVoiceError(w, err)
+		return
+	}
+	status := http.StatusCreated
+	if !created {
+		status = http.StatusOK
+	}
+	writeJSON(w, status, v)
 }

@@ -283,3 +283,87 @@ func TestVoiceProviderRoutesEventsToCalls(t *testing.T) {
 		t.Fatalf("routed call = %v", c)
 	}
 }
+
+// The phone's Calls tab (omni-notify-ios docs/calls/API.md): capabilities,
+// history, one call, and call back.
+func TestVoiceAPICallsTab(t *testing.T) {
+	e := newVoiceServer(t)
+	dev := e.enroll(t)
+
+	if _, b := e.do(t, "GET", "/api/v1/devices/self", dev, ""); b["calls"].(map[string]any)["history"] != true {
+		t.Fatalf("self = %v", b)
+	}
+	code, b := e.do(t, "POST", "/api/v1/calls", claudeToken, `{"recipient":"me","severity":"critical",
+		"title":"Jellyfin streams failing with 5xx above 20%","message":"Jellyfin streams are failing.",
+		"incident":{"id":"inc_128","number":128,"title":"Jellyfin streams failing with 5xx above 20%","severity":"sev1"}}`)
+	if code != 201 {
+		t.Fatalf("create: %d %v", code, b)
+	}
+	id := b["call"].(map[string]any)["id"].(string)
+	e.svc.Tick(context.Background())
+	// The phone sees the incident while it rings.
+	if _, b := e.do(t, "GET", "/api/v1/calls/"+id, dev, ""); b["incident"].(map[string]any)["number"] != float64(128) {
+		t.Fatalf("device view = %v", b)
+	}
+	for _, st := range []string{`{"state":"answered"}`, `{"state":"active"}`, `{"state":"completed"}`} {
+		if code, b := e.do(t, "POST", "/api/v1/calls/"+id+"/state", dev, st); code != 200 {
+			t.Fatalf("%s: %d %v", st, code, b)
+		}
+	}
+
+	code, b = e.do(t, "GET", "/api/v1/devices/self/calls?limit=10", dev, "")
+	calls, _ := b["calls"].([]any)
+	if code != 200 || len(calls) != 1 || b["as_of"] == nil || b["next_before"] != nil {
+		t.Fatalf("history: %d %v", code, b)
+	}
+	if c := calls[0].(map[string]any); c["id"] != id || c["answered_here"] != true || c["state"] != "completed" ||
+		c["incident"].(map[string]any)["id"] != "inc_128" || c["caller_name"] != "Claude" {
+		t.Fatalf("record = %v", c)
+	}
+	if code, _ := e.do(t, "GET", "/api/v1/devices/self/calls?before=yesterday", dev, ""); code != 400 {
+		t.Fatalf("bad cursor: %d", code)
+	}
+	code, b = e.do(t, "GET", "/api/v1/devices/self/calls/"+id, dev, "")
+	if code != 200 || b["greeting"].(map[string]any)["text"] == "" || b["turns"] == nil {
+		t.Fatalf("detail: %d %v", code, b)
+	}
+	// Agents and admins don't use the phone's routes.
+	if code, _ := e.do(t, "GET", "/api/v1/devices/self/calls", claudeToken, ""); code != 403 {
+		t.Fatalf("agent on history: %d", code)
+	}
+
+	callBack := func(body, key string) (int, map[string]any) {
+		req, _ := http.NewRequest("POST", e.ts.URL+"/api/v1/devices/self/calls", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+dev)
+		req.Header.Set("Idempotency-Key", key)
+		resp, err := e.ts.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		return resp.StatusCode, out
+	}
+	code, b = callBack(`{"regarding_call":"`+id+`"}`, "k1")
+	if code != 201 || b["state"] != "answered" || b["answered_here"] != true || b["incident"] == nil {
+		t.Fatalf("call back: %d %v", code, b)
+	}
+	back := b["id"].(string)
+	if code, b := callBack(`{"regarding_call":"`+id+`"}`, "k1"); code != 200 || b["id"] != back {
+		t.Fatalf("replay: %d %v", code, b)
+	}
+	if code, _ := callBack(`{"regarding_call":"`+id+`"}`, "k2"); code != 409 {
+		t.Fatalf("while on the call: %d", code)
+	}
+	// The phone talks on it as on any answered call.
+	if code, b := e.do(t, "POST", "/api/v1/calls/"+back+"/state", dev, `{"state":"active"}`); code != 200 {
+		t.Fatalf("active: %d %v", code, b)
+	}
+	if code, _ := callBack(`{"regarding_call":"nope"}`, "k3"); code != 404 {
+		t.Fatalf("unknown call: %d", code)
+	}
+	if code, _ := callBack(`{}`, "k4"); code != 400 {
+		t.Fatalf("no call: %d", code)
+	}
+}

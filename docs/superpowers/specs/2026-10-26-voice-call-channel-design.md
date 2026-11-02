@@ -111,6 +111,33 @@ Snoozes and reschedules the user speaks on a call are user-requested by construc
 
 ## Status (2026-10-26)
 
+### The phone's Calls tab (2026-11-01)
+
+The On-Call app's Calls tab (omni-notify-ios `docs/calls/API.md`) is served here:
+- **C0:** `GET /api/v1/devices/self` says `calls: {history, call_back}`.
+- **C1:** `GET /api/v1/devices/self/calls` lists every call to the device's person that
+  has happened, newest first by when it rang (or was answered, or ended), with
+  `answered_here`, `follow_up_at` for a snooze or reschedule, `turn_count`, and a
+  `next_before` cursor. A call with no title gets the first sentence of its message.
+- **C2:** `GET /api/v1/devices/self/calls/{id}` adds Gobbie's greeting and opening and the
+  turns. `heard` is empty unless `store_transcripts` is on.
+- **C3:** a call can carry `incident` (column `voice_calls.incident`, added to older
+  databases at start), from `POST /api/v1/calls` or from a routed page's
+  `oncall_incident` label. It is in every view of the call, and follow-ups keep it.
+  - Not done: acknowledging on the call records the call's outcome only. Acknowledging
+    the incident itself needs a hook into the on-call plugin, which is on main, not on this
+    branch; the phone's Acknowledge button uses the plugin's own API meanwhile.
+- **C4:** `POST /api/v1/devices/self/calls {"regarding_call"}` with an `Idempotency-Key`:
+  - It makes an interactive, user-requested call (origin `phone`): same agent, message
+    and incident, already answered by that device, recorded as a ring for it.
+  - It doesn't ring, and rate limits and quiet hours don't apply.
+  - 409 while a call to the person is live, 422 for test or simulated calls, or when the
+    agent may no longer call.
+  - Gobbie opens with "Hi, it's Gobbie, calling you back for …".
+
+Tests: `internal/voice/history_test.go`, `TestVoiceAPICallsTab`, and the column
+migration in `internal/storage/calls_test.go`.
+
 ### Verified
 
 - `go test -race ./...` passes; the existing suites are unchanged and still pass.

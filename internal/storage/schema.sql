@@ -125,7 +125,8 @@ CREATE TABLE IF NOT EXISTS voice_calls (
     ended_at         TEXT NOT NULL DEFAULT '',
     last_activity_at TEXT NOT NULL,
     created_at       TEXT NOT NULL,
-    updated_at       TEXT NOT NULL
+    updated_at       TEXT NOT NULL,
+    incident         TEXT NOT NULL DEFAULT '' -- JSON models.CallIncident, '' for none
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_voice_calls_idem
     ON voice_calls(agent, idempotency_key) WHERE idempotency_key <> '';

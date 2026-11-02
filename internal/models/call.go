@@ -130,6 +130,18 @@ type Call struct {
 	LastActivityAt time.Time   `json:"last_activity_at"`
 	CreatedAt      time.Time   `json:"created_at"`
 	UpdatedAt      time.Time   `json:"updated_at"`
+	// Incident is the on-call incident the call was placed for, if any. The
+	// phone shows it on the call and in its history; follow-ups keep it.
+	Incident *CallIncident `json:"incident,omitempty"`
+}
+
+// CallIncident names an on-call incident (the on-call plugin's) without
+// depending on it: what the phone needs to show it and open it.
+type CallIncident struct {
+	ID       string `json:"id"`
+	Number   int    `json:"number"`
+	Title    string `json:"title"`
+	Severity string `json:"severity,omitempty"` // the plugin's sev1…sev4
 }
 
 // CallLogEntry is one audited step of a call: a state change, a deferral, a

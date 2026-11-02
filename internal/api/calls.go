@@ -36,6 +36,9 @@ type createCallRequest struct {
 	UserRequested  bool   `json:"user_requested"`
 	IdempotencyKey string `json:"idempotency_key"`
 	Test           bool   `json:"test"`
+	// Incident is the on-call incident the call is placed for: the phone
+	// shows it, with Acknowledge, on the call and in its history.
+	Incident *models.CallIncident `json:"incident"`
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
@@ -70,6 +73,8 @@ func (s *Server) writeVoiceError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "call not found")
 	case errors.Is(err, voice.ErrState):
 		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, voice.ErrUnprocessable):
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
 	default:
 		s.log.Error("voice", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
@@ -108,7 +113,7 @@ func (s *Server) handleCreateCall(w http.ResponseWriter, r *http.Request) {
 	cr := voice.CreateRequest{
 		Recipient: req.Recipient, Type: req.Type, Severity: req.Severity, Title: req.Title,
 		Message: req.Message, Details: req.Details, Interactive: req.Interactive,
-		UserRequested: req.UserRequested, Test: req.Test,
+		UserRequested: req.UserRequested, Test: req.Test, Incident: req.Incident,
 		IdempotencyKey: firstNonEmpty(req.IdempotencyKey, r.Header.Get("Idempotency-Key")),
 	}
 	if req.Schedule != nil {

@@ -124,6 +124,8 @@ type CreateRequest struct {
 	UserRequested  bool
 	IdempotencyKey string
 	Test           bool
+	// Incident is the on-call incident the call is placed for, if any.
+	Incident *models.CallIncident
 }
 
 // Caller is the authenticated party placing a call.
@@ -169,6 +171,15 @@ func (s *Service) CreateCall(ctx context.Context, caller Caller, req CreateReque
 		return CreateResult{}, invalid("invalid severity %q", req.Severity)
 	case len(req.IdempotencyKey) > 200:
 		return CreateResult{}, invalid("idempotency_key is too long")
+	}
+	if in := req.Incident; in != nil {
+		in.ID, in.Title, in.Severity = strings.TrimSpace(in.ID), strings.TrimSpace(in.Title), strings.TrimSpace(in.Severity)
+		switch {
+		case in.ID == "" || len(in.ID) > 100:
+			return CreateResult{}, invalid("incident.id is required and at most 100 characters")
+		case in.Number < 0, len(in.Title) > maxTitle, len(in.Severity) > 20:
+			return CreateResult{}, invalid("incident has an invalid number, title or severity")
+		}
 	}
 	user, ok := s.cfg.User(req.Recipient)
 	if !ok {
@@ -241,7 +252,7 @@ func (s *Service) CreateCall(ctx context.Context, caller Caller, req CreateReque
 		Message: req.Message, Details: strings.TrimSpace(req.Details), Interactive: interactive,
 		UserRequested: req.UserRequested, IdempotencyKey: req.IdempotencyKey, State: models.CallScheduled,
 		Attempt: 1, Origin: orDefault(caller.Origin, OriginAPI), ScheduledAt: at, ExpiresAt: at.Add(expiresIn),
-		EventRef: caller.EventRef, LastActivityAt: now, CreatedAt: now, UpdatedAt: now,
+		EventRef: caller.EventRef, LastActivityAt: now, CreatedAt: now, UpdatedAt: now, Incident: req.Incident,
 	}
 	if c.Test {
 		c.CallerName += " (test)"
@@ -338,7 +349,7 @@ func (s *Service) CreateFromEvent(ctx context.Context, msg models.NotificationMe
 	}
 	req := CreateRequest{
 		Recipient: recipient, Type: ev.Type, Severity: ev.Severity, Title: ev.Title, Message: text,
-		Details: ev.Description, Test: msg.Test,
+		Details: ev.Description, Test: msg.Test, Incident: incidentFromEvent(ev),
 	}
 	if msg.DeliveryID != 0 {
 		req.IdempotencyKey = fmt.Sprintf("delivery:%d", msg.DeliveryID)

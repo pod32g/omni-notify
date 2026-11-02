@@ -180,6 +180,9 @@ type DeviceCall struct {
 	RingDeadline    *time.Time `json:"ring_deadline,omitempty"`
 	RingSeconds     int        `json:"ring_seconds"`
 	AnsweredHere    bool       `json:"answered_here"`
+	// Incident is the on-call incident the call is about (C3), for the phone
+	// to show with Acknowledge.
+	Incident *models.CallIncident `json:"incident"`
 }
 
 func (s *Service) deviceView(c models.Call, d models.Device) DeviceCall {
@@ -193,7 +196,7 @@ func (s *Service) deviceView(c models.Call, d models.Device) DeviceCall {
 		Simulated: c.Simulated, Interactive: c.Interactive, Greeting: s.responder.Greeting(c),
 		GreetingPauseMs: int(GreetingPause / time.Millisecond), Opening: s.responder.Opening(c),
 		RingDeadline: c.RingDeadline, RingSeconds: int(s.cfg.DeviceRingTimeout.D() / time.Second),
-		AnsweredHere: c.AnsweredBy == d.ID,
+		AnsweredHere: c.AnsweredBy == d.ID, Incident: c.Incident,
 	}
 }
 

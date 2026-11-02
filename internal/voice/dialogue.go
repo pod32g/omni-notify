@@ -85,6 +85,8 @@ func (Scripted) Greeting(c models.Call) Utterance {
 		return say("Hi, this is " + voiceName + " with a test call from Omni Notify, for " + c.CallerName + ".")
 	case c.Simulated:
 		return say("Hi, this is " + voiceName + " with a simulated call for " + c.CallerName + ".")
+	case c.Origin == OriginPhone:
+		return say("Hi, it's " + voiceName + ", calling you back for " + c.CallerName + ".")
 	case strings.EqualFold(c.Type, "reminder"):
 		return say("Hi, this is " + voiceName + " with a reminder from " + c.CallerName + ".")
 	case c.Severity == models.SeverityCritical:

@@ -321,14 +321,22 @@ call is held back, the answer explains why:
 | POST | `/api/v1/calls/{id}/turns` | the answering device | one utterance in, the reply out |
 | POST | `/api/v1/devices/enrollments` | admin | one-time enrollment code for a user |
 | POST | `/api/v1/devices/enroll` | the code | enroll a phone, get its credential |
-| GET/PUT | `/api/v1/devices/self` | device | refresh the VoIP token |
+| GET/PUT | `/api/v1/devices/self` | device | refresh the VoIP token; `calls` says what the phone's Calls tab can use |
 | GET | `/api/v1/devices/self/ringing` | device | calls waiting for it (development poll transport) |
+| GET | `/api/v1/devices/self/calls[?limit=&before=]` | device | the person's calls, newest first (the phone's history) |
+| GET | `/api/v1/devices/self/calls/{id}` | device | one of them, with what was said |
+| POST | `/api/v1/devices/self/calls` | device | call back about an earlier call (`Idempotency-Key`); answered by that phone |
 | GET, PATCH | `/api/v1/devices[/{id}]` | admin | list, disable |
 
 Agent and device credentials reach only these endpoints.
 
 Routed events can ring too: a `voice_call` provider (`config: {recipient, agent}`) in
 any route turns the event into a call.
+
+A call can name the on-call incident it is about (`incident: {id, number, title,
+severity}` on `POST /api/v1/calls`; a routed page from the on-call plugin carries it from
+its `oncall_incident` label). The phone shows it with Acknowledge, and follow-ups keep
+it. The phone-side contract is `docs/calls/API.md` in the On-Call app's repository.
 
 ### For AI agents (MCP)
 

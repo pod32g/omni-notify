@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -18,7 +19,7 @@ var ErrConflict = errors.New("conflict")
 const selectCallCols = `SELECT id, event_ref, agent, caller_name, simulated, test, recipient, type,
 	severity, title, message, details, interactive, user_requested, idempotency_key, state,
 	outcome, reason, attempt, parent_call_id, origin, scheduled_at, expires_at, ring_deadline,
-	rang_at, answered_at, answered_by, ended_at, last_activity_at, created_at, updated_at`
+	rang_at, answered_at, answered_by, ended_at, last_activity_at, created_at, updated_at, incident`
 
 // InsertCall stores a new call and its first log entry in one transaction. A
 // call whose (agent, idempotency_key) already exists is not inserted: the
@@ -58,14 +59,14 @@ func insertCallTx(ctx context.Context, tx *sql.Tx, c models.Call) error {
 		INSERT INTO voice_calls (id, event_ref, agent, caller_name, simulated, test, recipient, type,
 			severity, title, message, details, interactive, user_requested, idempotency_key, state,
 			outcome, reason, attempt, parent_call_id, origin, scheduled_at, expires_at, ring_deadline,
-			rang_at, answered_at, answered_by, ended_at, last_activity_at, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			rang_at, answered_at, answered_by, ended_at, last_activity_at, created_at, updated_at, incident)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		c.ID, c.EventRef, c.Agent, c.CallerName, boolInt(c.Simulated), boolInt(c.Test), c.Recipient, c.Type,
 		string(c.Severity), c.Title, c.Message, c.Details, boolInt(c.Interactive), boolInt(c.UserRequested),
 		c.IdempotencyKey, string(c.State), string(c.Outcome), c.Reason, c.Attempt, c.ParentCallID, c.Origin,
 		fmtTime(c.ScheduledAt), fmtTime(c.ExpiresAt), fmtOptTime(c.RingDeadline), fmtOptTime(c.RangAt),
 		fmtOptTime(c.AnsweredAt), c.AnsweredBy, fmtOptTime(c.EndedAt), fmtTime(c.LastActivityAt),
-		fmtTime(c.CreatedAt), fmtTime(c.UpdatedAt))
+		fmtTime(c.CreatedAt), fmtTime(c.UpdatedAt), fmtIncident(c.Incident))
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
 			return ErrConflict
@@ -527,14 +528,20 @@ func scanCall(sc scanner) (models.Call, error) {
 		simulated, test, interactive, userRequested         int
 		severity, state, outcome                            string
 		scheduled, expires, deadline, rang, answered, ended string
-		activity, created, updated                          string
+		activity, created, updated, incident                string
 	)
 	err := sc.Scan(&c.ID, &c.EventRef, &c.Agent, &c.CallerName, &simulated, &test, &c.Recipient, &c.Type,
 		&severity, &c.Title, &c.Message, &c.Details, &interactive, &userRequested, &c.IdempotencyKey, &state,
 		&outcome, &c.Reason, &c.Attempt, &c.ParentCallID, &c.Origin, &scheduled, &expires, &deadline,
-		&rang, &answered, &c.AnsweredBy, &ended, &activity, &created, &updated)
+		&rang, &answered, &c.AnsweredBy, &ended, &activity, &created, &updated, &incident)
 	if err != nil {
 		return models.Call{}, err
+	}
+	if incident != "" {
+		var in models.CallIncident
+		if json.Unmarshal([]byte(incident), &in) == nil {
+			c.Incident = &in
+		}
 	}
 	c.Simulated, c.Test, c.Interactive, c.UserRequested = simulated != 0, test != 0, interactive != 0, userRequested != 0
 	c.Severity, c.State, c.Outcome = models.Severity(severity), models.CallState(state), models.CallOutcome(outcome)
@@ -543,6 +550,14 @@ func scanCall(sc scanner) (models.Call, error) {
 	c.AnsweredAt, c.EndedAt = parseOptTime(answered), parseOptTime(ended)
 	c.LastActivityAt, c.CreatedAt, c.UpdatedAt = parseTime(activity), parseTime(created), parseTime(updated)
 	return c, nil
+}
+
+func fmtIncident(in *models.CallIncident) string {
+	if in == nil {
+		return ""
+	}
+	b, _ := json.Marshal(in)
+	return string(b)
 }
 
 func boolInt(b bool) int {
@@ -565,4 +580,106 @@ func parseOptTime(s string) *time.Time {
 	}
 	t := parseTime(s)
 	return &t
+}
+
+// callAt is when a call happened, for a phone's history: when it rang, or
+// for one that never rang, when it was answered (a call back) or ended.
+const callAt = `CASE WHEN rang_at <> '' THEN rang_at WHEN answered_at <> '' THEN answered_at
+	WHEN ended_at <> '' THEN ended_at ELSE created_at END`
+
+// CallHistory returns a recipient's calls that have happened (every state but
+// scheduled), newest first, before the given time when it is not zero.
+func (s *Store) CallHistory(ctx context.Context, recipient string, before time.Time, limit int) ([]models.Call, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	q := selectCallCols + ` FROM voice_calls WHERE recipient = ? AND state <> 'scheduled'`
+	args := []any{recipient}
+	if !before.IsZero() {
+		q += ` AND ` + callAt + ` < ?`
+		args = append(args, fmtTime(before))
+	}
+	q += ` ORDER BY ` + callAt + ` DESC, id DESC LIMIT ?`
+	return s.queryCalls(ctx, q, append(args, limit)...)
+}
+
+// FollowUpTimes returns, for each of the given calls that the recipient
+// snoozed or rescheduled, when the follow-up call is due.
+func (s *Store) FollowUpTimes(ctx context.Context, ids []string) (map[string]time.Time, error) {
+	out := map[string]time.Time{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT parent_call_id, scheduled_at FROM voice_calls
+		WHERE origin = 'user' AND parent_call_id IN (?`+strings.Repeat(",?", len(ids)-1)+`)`, anys(ids)...)
+	if err != nil {
+		return nil, fmt.Errorf("follow-ups: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var parent, at string
+		if err := rows.Scan(&parent, &at); err != nil {
+			return nil, err
+		}
+		out[parent] = parseTime(at)
+	}
+	return out, rows.Err()
+}
+
+// TurnCounts returns how many turns each of the given calls has.
+func (s *Store) TurnCounts(ctx context.Context, ids []string) (map[string]int, error) {
+	out := map[string]int{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT call_id, COUNT(*) FROM voice_turns
+		WHERE call_id IN (?`+strings.Repeat(",?", len(ids)-1)+`) GROUP BY call_id`, anys(ids)...)
+	if err != nil {
+		return nil, fmt.Errorf("turn counts: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		out[id] = n
+	}
+	return out, rows.Err()
+}
+
+// StoredTurn is a turn as kept, with when it was taken.
+type StoredTurn struct {
+	Turn
+	At time.Time
+}
+
+// CallTurns returns a call's turns in order.
+func (s *Store) CallTurns(ctx context.Context, callID string) ([]StoredTurn, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT seq, device_id, at, intent, transcript, response FROM voice_turns
+		WHERE call_id = ? ORDER BY seq ASC`, callID)
+	if err != nil {
+		return nil, fmt.Errorf("call turns: %w", err)
+	}
+	defer rows.Close()
+	var out []StoredTurn
+	for rows.Next() {
+		t := StoredTurn{Turn: Turn{CallID: callID}}
+		var at string
+		if err := rows.Scan(&t.Seq, &t.DeviceID, &at, &t.Intent, &t.Transcript, &t.Response); err != nil {
+			return nil, err
+		}
+		t.At = parseTime(at)
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+func anys(ss []string) []any {
+	out := make([]any, len(ss))
+	for i, s := range ss {
+		out[i] = s
+	}
+	return out
 }

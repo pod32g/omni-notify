@@ -139,6 +139,10 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET /api/v1/devices/self", s.handleGetSelf)
 		mux.HandleFunc("PUT /api/v1/devices/self", s.handlePutSelf)
 		mux.HandleFunc("GET /api/v1/devices/self/ringing", s.handleRinging)
+		// The phone's own calls and call back (omni-notify-ios docs/calls/API.md).
+		mux.HandleFunc("GET /api/v1/devices/self/calls", s.handleDeviceHistory)
+		mux.HandleFunc("GET /api/v1/devices/self/calls/{id}", s.handleDeviceHistoryCall)
+		mux.HandleFunc("POST /api/v1/devices/self/calls", s.handleDeviceCallBack)
 	}
 
 	// Middleware chain, outermost first.
