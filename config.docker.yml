@@ -73,11 +73,20 @@ voice:
       display_name: Omni On-Call
       may_override_quiet_hours_when_critical: true
       actions: [acknowledge]
+    # Omni-Sentinel (pod32g/omni-sentinel): calls for RED alerts that are
+    # highly relevant and every BLACK one; "OK" acknowledges the alert there.
+    # The token lives in ~/omni-sentinel/.env on chizu (OMNI_NOTIFY_AGENT_TOKEN).
+    - id: omni-sentinel
+      display_name: Omni Sentinel
+      token_sha256: ["08bc23d5683a468769bfbeaf1f36cfa144d2a81d8715ee44d3317810dfc7502b"]
+      may_override_quiet_hours_when_critical: true
+      allow_test: true
+      actions: [acknowledge]
   users:
     - id: pod32g
       aliases: [me]
       timezone: America/Mexico_City
-      allowed_agents: [claude, omni-oncall]
+      allowed_agents: [claude, omni-oncall, omni-sentinel]
       rate_limit: {max_calls_per_hour: 6, cooldown: 1m}
       retry: {max_attempts: 2, delay: 2m}
       max_snooze: 12h

@@ -333,7 +333,9 @@ annotation (`<development|production>:<hex token>`, comma-separated), with `apns
 `apns_thread_id`, `apns_interruption_level`, `apns_collapse_id` and `apns_data` (a JSON object
 beside `aps`). Notify keeps no device list: the on-call plugin is the producer that knows whose
 phones to ring (docs/plugins/oncall.md). A token Apple says is gone is skipped; the delivery fails
-only when no device got it.
+only when no device got it. An Apple key serves every app of its team, so a second app's provider
+can set `key_from: <another apns provider>` (same `key_id` and `team_id`) instead of a secret:
+it signs with that provider's key and keeps its own `topic`.
 
 Providers that talk to a fixed SaaS endpoint also accept an override config key
 (`api_base` / `api_url` / `events_url`) — handy for self-hosted/proxied instances.

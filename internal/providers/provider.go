@@ -84,7 +84,20 @@ type MessageStore interface {
 type Option func(*options)
 
 type options struct {
-	messages MessageStore
+	messages  MessageStore
+	providers ProviderSource
+}
+
+// ProviderSource reads a stored provider with its secret.
+type ProviderSource interface {
+	GetProvider(ctx context.Context, name string) (models.ProviderConfig, error)
+}
+
+// WithProviderSource lets an apns provider take its .p8 from another stored
+// apns provider (config key_from): one Apple key serves every app of a team,
+// so a second app's provider needs no copy of the key.
+func WithProviderSource(s ProviderSource) Option {
+	return func(o *options) { o.providers = s }
 }
 
 // WithMessageStore lets providers remember the messages they send by ref.
@@ -150,6 +163,13 @@ func NewDefault(httpClient *http.Client, allowPrivate bool, opts ...Option) *Reg
 	})
 	// Its own HTTP/2 client: Apple requires HTTP/2, and its hosts are fixed.
 	r.Register("apns", func(cfg map[string]any, secret string) (Provider, error) {
+		if from := cfgString(cfg, "key_from"); from != "" {
+			key, err := apnsKeyFrom(o.providers, from, cfg, secret)
+			if err != nil {
+				return nil, err
+			}
+			secret = key
+		}
 		return newAPNS(cfg, secret, allowPrivate)
 	})
 	return r

@@ -26,10 +26,13 @@ import (
 // with a token-based (.p8) credential. Notify keeps no device list: the
 // producer (the on-call plugin) knows whose phones to ring.
 //
-// secret: the .p8 key from Apple, PEM (required).
+// secret: the .p8 key from Apple, PEM (required, unless key_from).
 // config:
 //   - team_id, key_id: the Apple Developer team and the key's id (required)
 //   - topic: the app's bundle id (required)
+//   - key_from: the name of another apns provider whose .p8 to use instead of
+//     a secret of its own (same key_id and team_id). An Apple key serves every
+//     app of its team, so a second app needs no copy of the key.
 //   - development_url, production_url: endpoint overrides, mainly for tests
 //
 // The event's annotations say where and how:
@@ -102,6 +105,32 @@ func newAPNS(cfg map[string]any, secret string, allowPrivate bool) (Provider, er
 	}
 	a.key = key
 	return a, nil
+}
+
+// apnsKeyFrom returns the .p8 of the stored apns provider `from`, for a
+// provider whose config says key_from. Only the key is shared: the topic stays
+// the borrower's, and its key_id and team_id must name the same key.
+func apnsKeyFrom(src ProviderSource, from string, cfg map[string]any, secret string) (string, error) {
+	switch {
+	case secret != "":
+		return "", errors.New("apns: give the .p8 secret or key_from, not both")
+	case src == nil:
+		return "", errors.New("apns: key_from needs the provider store")
+	}
+	p, err := src.GetProvider(context.Background(), from)
+	if err != nil {
+		return "", fmt.Errorf("apns: key_from %q: %w", from, err)
+	}
+	keyID, teamID := cfgString(p.Config, "key_id"), cfgString(p.Config, "team_id")
+	switch {
+	case p.Kind != "apns":
+		return "", fmt.Errorf("apns: key_from %q is a %s provider, not apns", from, p.Kind)
+	case cfgString(p.Config, "key_from") != "":
+		return "", fmt.Errorf("apns: key_from %q borrows its key too; name the provider that holds it", from)
+	case keyID != cfgString(cfg, "key_id") || teamID != cfgString(cfg, "team_id"):
+		return "", fmt.Errorf("apns: key_from %q holds key %s of team %s, not the key_id and team_id given", from, keyID, teamID)
+	}
+	return p.Secret, nil
 }
 
 // withClient replaces the HTTP client (tests).

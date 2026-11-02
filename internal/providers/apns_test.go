@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"io"
 	"math/big"
 	"net/http"
@@ -208,5 +209,65 @@ func TestAPNsRefusesBrokenConfigAndEvents(t *testing.T) {
 	ev.Annotations["apns_interruption_level"] = "loud"
 	if err := p.Send(context.Background(), models.NotificationMessage{Event: ev}); err == nil {
 		t.Error("an unknown interruption level was sent")
+	}
+}
+
+type stubProviders map[string]models.ProviderConfig
+
+func (s stubProviders) GetProvider(_ context.Context, name string) (models.ProviderConfig, error) {
+	p, ok := s[name]
+	if !ok {
+		return models.ProviderConfig{}, errors.New("not found")
+	}
+	return p, nil
+}
+
+// A second app's provider signs with the first one's key (key_from) and keeps
+// its own topic; anything that is not the same Apple key is refused.
+func TestAPNsBorrowsAnotherProvidersKey(t *testing.T) {
+	f, p8 := newFakeAPNs(t)
+	src := stubProviders{
+		"oncall-push": {Name: "oncall-push", Kind: "apns", Secret: p8,
+			Config: map[string]any{"team_id": "TEAM123456", "key_id": "KEYBORROW1", "topic": "dev.pod32g.OmniNotify"}},
+		"borrower": {Name: "borrower", Kind: "apns",
+			Config: map[string]any{"team_id": "TEAM123456", "key_id": "KEYBORROW1", "topic": "x", "key_from": "oncall-push"}},
+		"Telegram": {Name: "Telegram", Kind: "telegram", Secret: "bot-token"},
+	}
+	r := NewDefault(nil, true, WithProviderSource(src))
+	cfg := func(extra map[string]any) map[string]any {
+		c := map[string]any{"team_id": "TEAM123456", "key_id": "KEYBORROW1", "topic": "dev.pod32g.OmniSentinel",
+			"key_from": "oncall-push", "development_url": f.srv.URL, "production_url": f.srv.URL}
+		for k, v := range extra {
+			c[k] = v
+		}
+		return c
+	}
+	p, err := r.Build("apns", cfg(nil), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.(*apns).withClient(f.srv.Client()).Send(context.Background(), models.NotificationMessage{Event: page("development:aaa")}); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.got) != 1 || f.got[0].header.Get("apns-topic") != "dev.pod32g.OmniSentinel" {
+		t.Fatalf("requests: %+v", f.got)
+	}
+	for name, c := range map[string]struct {
+		cfg    map[string]any
+		secret string
+	}{
+		"other key id":   {cfg(map[string]any{"key_id": "OTHERKEY01"}), ""},
+		"other team":     {cfg(map[string]any{"team_id": "OTHERTEAM1"}), ""},
+		"not apns":       {cfg(map[string]any{"key_from": "Telegram"}), ""},
+		"missing":        {cfg(map[string]any{"key_from": "nope"}), ""},
+		"borrowed twice": {cfg(map[string]any{"key_from": "borrower"}), ""},
+		"and a secret":   {cfg(nil), p8},
+	} {
+		if _, err := r.Build("apns", c.cfg, c.secret); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if _, err := NewDefault(nil, true).Build("apns", cfg(nil), ""); err == nil {
+		t.Error("key_from without a provider store: accepted")
 	}
 }
