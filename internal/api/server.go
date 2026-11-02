@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/pod32g/omni-notify/internal/auth"
 	"github.com/pod32g/omni-notify/internal/metrics"
 	"github.com/pod32g/omni-notify/internal/notifier"
 	"github.com/pod32g/omni-notify/internal/providers"
 	"github.com/pod32g/omni-notify/internal/storage"
+	"github.com/pod32g/omni-notify/internal/voice"
 	"github.com/pod32g/omni-notify/internal/web"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -24,6 +26,10 @@ type Config struct {
 	MetricsRequireAuth bool
 	ReadTimeout        time.Duration
 	WriteTimeout       time.Duration
+	// Voice enables the VOICE_CALL endpoints (nil: disabled).
+	Voice *voice.Service
+	// Identity verifies Omni-Identity agent tokens (nil: not accepted).
+	Identity *auth.Verifier
 }
 
 // Server wires the REST API to the storage, notifier and metrics layers.
@@ -117,6 +123,23 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /api/v1/deliveries", s.handleListDeliveries)
 	mux.HandleFunc("POST /api/v1/test", s.handleTest)
+
+	if s.cfg.Voice != nil {
+		mux.HandleFunc("POST /api/v1/calls", s.handleCreateCall)
+		mux.HandleFunc("GET /api/v1/calls", s.handleListCalls)
+		mux.HandleFunc("GET /api/v1/calls/{id}", s.handleGetCall)
+		mux.HandleFunc("POST /api/v1/calls/{id}/cancel", s.handleCancelCall)
+		mux.HandleFunc("POST /api/v1/calls/{id}/state", s.handleCallState)
+		mux.HandleFunc("POST /api/v1/calls/{id}/turns", s.handleCallTurn)
+
+		mux.HandleFunc("POST /api/v1/devices/enroll", s.handleEnrollDevice)
+		mux.HandleFunc("POST /api/v1/devices/enrollments", s.handleCreateEnrollment)
+		mux.HandleFunc("GET /api/v1/devices", s.handleListDevices)
+		mux.HandleFunc("PATCH /api/v1/devices/{id}", s.handlePatchDevice)
+		mux.HandleFunc("GET /api/v1/devices/self", s.handleGetSelf)
+		mux.HandleFunc("PUT /api/v1/devices/self", s.handlePutSelf)
+		mux.HandleFunc("GET /api/v1/devices/self/ringing", s.handleRinging)
+	}
 
 	// Middleware chain, outermost first.
 	var h http.Handler = mux

@@ -166,7 +166,7 @@ func (n *Notifier) deliver(ctx context.Context, d models.Delivery) {
 		return
 	}
 
-	msg := models.NotificationMessage{Event: stored.Event, Route: d.Route}
+	msg := models.NotificationMessage{Event: stored.Event, Route: d.Route, EventRef: stored.ID, DeliveryID: d.ID}
 	sendCtx, cancel := context.WithTimeout(ctx, n.cfg.SendTimeout)
 	start := time.Now()
 	sendErr := prov.Send(sendCtx, msg)
@@ -259,4 +259,28 @@ func (n *Notifier) TestProvider(ctx context.Context, name string) error {
 	sendCtx, cancel := context.WithTimeout(ctx, n.cfg.SendTimeout)
 	defer cancel()
 	return prov.Send(sendCtx, msg)
+}
+
+// SendFallback enqueues a delivery of a stored event to one provider, outside
+// routing. The voice channel uses it when a call ends unanswered.
+func (n *Notifier) SendFallback(ctx context.Context, eventRef int64, provider string) error {
+	ev, err := n.store.GetEvent(ctx, eventRef)
+	if err != nil {
+		return fmt.Errorf("load event %d: %w", eventRef, err)
+	}
+	if _, err := n.store.GetProvider(ctx, provider); err != nil {
+		return fmt.Errorf("fallback provider %q: %w", provider, err)
+	}
+	if _, err := n.store.EnqueueDelivery(ctx, models.Delivery{
+		Fingerprint:   ev.Fingerprint,
+		EventRef:      ev.ID,
+		Route:         "voice-fallback",
+		Provider:      provider,
+		MaxAttempts:   n.cfg.MaxAttempts,
+		NextAttemptAt: n.clock.Now().UTC(),
+	}); err != nil {
+		return err
+	}
+	n.nudge()
+	return nil
 }

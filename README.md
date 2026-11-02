@@ -250,6 +250,131 @@ back through the API).
 Implementing a new provider: satisfy `providers.Provider` and register it in
 `providers.NewDefault`.
 
+## Voice calls (VOICE_CALL)
+
+Omni-Notify can deliver a notification as a **real incoming call** on the owner's
+iPhone: the phone rings like any call (PushKit + CallKit, locked or not), and when it
+is answered, Gobbie's voice reads the message and the owner can answer back:
+"repeat that", "tell me more", "okay", "never mind", "give me ten more minutes", "call
+me back at five". Voice is a delivery channel, not a severity. Design and decisions:
+[docs/superpowers/specs/2026-10-26-voice-call-channel-design.md](docs/superpowers/specs/2026-10-26-voice-call-channel-design.md).
+The phone side is the Omni Notify iOS app (`omni-notify-ios`).
+
+How it fits together:
+
+- **Gobbie's voice runs on the phone.** It is the same Kokoro-82M model and sherpa-onnx
+  engine as Gobbie (OmniWeather), and recognition is on-device too. No audio crosses the
+  network.
+- **The server owns the rest:**
+  - who may call whom, and the policy (quiet hours, rate limits, retries);
+  - the schedule;
+  - the call's state machine;
+  - the dialogue. Each utterance is a *turn*; the server interprets it, persists any
+    action, and only then returns the reply to speak.
+- **The calls table is the scheduler.** A scheduled call is claimed by its conditional
+  transition to `ringing`, so a restart never rings a call twice, and nothing waits on an
+  in-memory timer.
+
+States: `scheduled → ringing → answered → active → completed`, or `declined`,
+`missed`, `expired`, `failed`, `cancelled`. Every transition is validated and logged.
+The `outcome` (`acknowledged`, `dismissed`, `snoozed`, `rescheduled`) is separate:
+answering is not acknowledging. A snooze or a retry is a new call linked by
+`parent_call_id`.
+
+### Placing a call
+
+```sh
+curl -X POST http://localhost:8080/api/v1/calls \
+  -H "Authorization: Bearer $AGENT_TOKEN" \
+  -d '{
+    "recipient": "me",
+    "type": "reminder",
+    "severity": "info",
+    "message": "Wake up. You asked me to remind you to lend me your phone.",
+    "user_requested": true,
+    "schedule": {"in": "10m"},
+    "idempotency_key": "lend-phone-1"
+  }'
+```
+
+The agent is whoever the credential says. Two credentials work:
+
+- an Omni-Identity `client_credentials` token whose client is listed in
+  `voice.agents[].identity_clients`;
+- a static token whose SHA-256 is in `token_sha256`.
+
+A request's `agent` field is only a cross-check. With the admin token, `agent` names
+who the call is for, and the call is marked **simulated**. `test: true` says "test
+call" on screen and aloud. `schedule` takes `at` (RFC 3339 with offset) or `in`. If the
+call is held back, the answer explains why:
+
+- `429` with `Retry-After` for the rate limit or cooldown;
+- `deferred: "quiet_hours"`, to ring when quiet hours end.
+
+| Method | Path | Who | Purpose |
+|---|---|---|---|
+| POST | `/api/v1/calls` | agent, admin | call now or later |
+| GET | `/api/v1/calls[?state=scheduled]` | agent (own), admin | list calls |
+| GET | `/api/v1/calls/{id}` | agent (own), admin, the rung device | call, log / the phone's view |
+| POST | `/api/v1/calls/{id}/cancel` | agent (own), admin | cancel a scheduled or ringing call |
+| POST | `/api/v1/calls/{id}/state` | the rung device | answered, active, declined, missed, completed, failed |
+| POST | `/api/v1/calls/{id}/turns` | the answering device | one utterance in, the reply out |
+| POST | `/api/v1/devices/enrollments` | admin | one-time enrollment code for a user |
+| POST | `/api/v1/devices/enroll` | the code | enroll a phone, get its credential |
+| GET/PUT | `/api/v1/devices/self` | device | refresh the VoIP token |
+| GET | `/api/v1/devices/self/ringing` | device | calls waiting for it (development poll transport) |
+| GET, PATCH | `/api/v1/devices[/{id}]` | admin | list, disable |
+
+Agent and device credentials reach only these endpoints.
+
+Routed events can ring too: a `voice_call` provider (`config: {recipient, agent}`) in
+any route turns the event into a call.
+
+### For AI agents (MCP)
+
+`omni-notify mcp` is a stdio MCP server with these tools:
+
+- `omni_notify_call`
+- `omni_notify_schedule_call`
+- `omni_notify_cancel_call`
+- `omni_notify_get_call_status`
+- `omni_notify_list_scheduled_calls`
+
+Configure it with `OMNI_NOTIFY_URL`, and either `OMNI_IDENTITY_TOKEN_URL` with
+`OMNI_NOTIFY_CLIENT_ID` and `OMNI_NOTIFY_CLIENT_SECRET[_FILE]`, or
+`OMNI_NOTIFY_AGENT_TOKEN[_FILE]`. For example, in Claude Code:
+
+```sh
+claude mcp add omni-notify -e OMNI_NOTIFY_URL=https://notify.example -e OMNI_NOTIFY_AGENT_TOKEN_FILE=~/.omni-notify-claude.token -- omni-notify mcp
+```
+
+`omni-notify call -message "…" [-in 10m | -at …] [-test] [-agent claude]` places one
+call from the shell (test mode).
+
+### Metrics
+
+The new counters and histograms:
+
+- `omni_notify_voice_calls_total{origin}`
+- `omni_notify_voice_calls_{answered,declined,missed,failed}_total`
+- `omni_notify_voice_calls_ended_total{state,outcome}`
+- `omni_notify_voice_call_duration_seconds`
+- `omni_notify_voice_call_setup_duration_seconds`
+- `omni_notify_voice_time_to_answer_seconds`
+- `omni_notify_voice_first_audio_latency_seconds`
+- `omni_notify_voice_stt_latency_seconds`
+- `omni_notify_voice_tts_latency_seconds`
+- `omni_notify_voice_turn_latency_seconds`
+- `omni_notify_voice_turns_total{intent}`
+- `omni_notify_voice_scheduled_calls_total{kind}`
+- `omni_notify_voice_scheduling_failures_total{reason}`
+- `omni_notify_voice_push_total{result}`
+- `omni_notify_voice_deferred_total{reason}`
+- `omni_notify_voice_duplicates_suppressed_total`
+
+Audio is never recorded, and transcripts are not stored unless
+`voice.store_transcripts` is set.
+
 ## Metrics
 
 `omni_notify_events_received_total`, `omni_notify_events_deduplicated_total`,

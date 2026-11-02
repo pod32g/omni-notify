@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/pod32g/omni-notify/internal/api"
+	"github.com/pod32g/omni-notify/internal/auth"
 	"github.com/pod32g/omni-notify/internal/clock"
 	"github.com/pod32g/omni-notify/internal/config"
 	"github.com/pod32g/omni-notify/internal/logship"
@@ -25,6 +26,7 @@ import (
 	"github.com/pod32g/omni-notify/internal/notifier"
 	"github.com/pod32g/omni-notify/internal/providers"
 	"github.com/pod32g/omni-notify/internal/storage"
+	"github.com/pod32g/omni-notify/internal/voice"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -45,6 +47,19 @@ func main() {
 	// a shell or curl (used by the Docker healthcheck and CI deploy readiness).
 	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
 		os.Exit(runHealthcheck(os.Args[2:]))
+	}
+
+	// Agent-side subcommands: the MCP server for AI agents, and a one-shot
+	// call (test tooling). Both talk to a running Omni-Notify over HTTP.
+	if len(os.Args) > 1 && os.Args[1] == "mcp" {
+		if err := runMCP(); err != nil {
+			fmt.Fprintln(os.Stderr, "mcp:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "call" {
+		os.Exit(runCall(os.Args[2:]))
 	}
 
 	configPath := flag.String("config", envOr("OMNI_NOTIFY_CONFIG", "config.yaml"), "path to config file")
@@ -157,10 +172,32 @@ func run(configPath string) error {
 		DefaultRepeatInterval: cfg.Dedupe.DefaultRepeatInterval.D(),
 	})
 
+	// VOICE_CALL channel (optional).
+	var (
+		voiceSvc *voice.Service
+		verifier *auth.Verifier
+	)
+	if cfg.Voice.Enabled {
+		voiceSvc, verifier, err = newVoice(cfg, store, m, n, registry, log)
+		if err != nil {
+			return err
+		}
+	}
+
 	deliveryCtx, cancelDelivery := context.WithCancel(context.Background())
 	if err := n.Start(deliveryCtx); err != nil {
 		cancelDelivery()
 		return err
+	}
+	if voiceSvc != nil {
+		voiceSvc.Start(deliveryCtx)
+	}
+	stopEngines := func() {
+		cancelDelivery()
+		n.Stop()
+		if voiceSvc != nil {
+			voiceSvc.Stop()
+		}
 	}
 
 	// HTTP server.
@@ -171,6 +208,8 @@ func run(configPath string) error {
 		MetricsRequireAuth: cfg.Security.MetricsRequireAuth,
 		ReadTimeout:        cfg.Server.ReadTimeout.D(),
 		WriteTimeout:       cfg.Server.WriteTimeout.D(),
+		Voice:              voiceSvc,
+		Identity:           verifier,
 	})
 
 	serverErr := make(chan error, 1)
@@ -182,8 +221,7 @@ func run(configPath string) error {
 
 	select {
 	case err := <-serverErr:
-		cancelDelivery()
-		n.Stop()
+		stopEngines()
 		return err
 	case s := <-sig:
 		log.Info("shutting down", "signal", s.String())
@@ -195,10 +233,40 @@ func run(configPath string) error {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Warn("http shutdown", "err", err)
 	}
-	cancelDelivery()
-	n.Stop()
+	stopEngines()
 	log.Info("shutdown complete")
 	return nil
+}
+
+// newVoice builds the VOICE_CALL service: the APNs pusher (or none, so phones
+// poll), the Identity verifier for agent tokens, and the voice_call provider
+// kind that lets routes deliver events by phone.
+func newVoice(cfg config.Config, store *storage.Store, m *metrics.Metrics, n *notifier.Notifier,
+	registry *providers.Registry, log *slog.Logger) (*voice.Service, *auth.Verifier, error) {
+	vc := cfg.Voice
+	var pusher voice.Pusher
+	if vc.APNS.Configured() {
+		a, err := voice.NewAPNS(vc.APNS, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		pusher = a
+	} else {
+		log.Warn("voice: APNs is not configured; calls wait for phones to poll (development only)")
+	}
+	var verifier *auth.Verifier
+	if vc.Identity.Configured() {
+		verifier = auth.NewVerifier(vc.Identity.Issuer, vc.Identity.JWKSURL, vc.Identity.CacheTTL.D(), nil)
+	}
+	svc := voice.NewService(vc, store, m, voice.Options{
+		Pusher: pusher, Fallback: n, Log: log, Poll: cfg.Delivery.PollInterval.D(),
+	})
+	registry.Register("voice_call", func(c map[string]any, _ string) (providers.Provider, error) {
+		return voice.NewRouteProvider(svc, c)
+	})
+	log.Info("voice calls enabled", "agents", len(vc.Agents), "users", len(vc.Users),
+		"push", pusher != nil, "identity", verifier != nil)
+	return svc, verifier, nil
 }
 
 func toProviderModels(seeds []config.ProviderSeed) []models.ProviderConfig {

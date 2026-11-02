@@ -90,3 +90,104 @@ CREATE TABLE IF NOT EXISTS deliveries (
 );
 CREATE INDEX IF NOT EXISTS idx_deliveries_queue       ON deliveries(status, next_attempt_at);
 CREATE INDEX IF NOT EXISTS idx_deliveries_fingerprint ON deliveries(fingerprint);
+
+-- Voice calls (VOICE_CALL channel). The table is also the voice scheduler: a
+-- 'scheduled' row whose scheduled_at has passed is claimed by its transition to
+-- 'ringing'. Optional timestamps are '' when unset.
+CREATE TABLE IF NOT EXISTS voice_calls (
+    id               TEXT PRIMARY KEY,
+    event_ref        INTEGER NOT NULL DEFAULT 0,
+    agent            TEXT NOT NULL,
+    caller_name      TEXT NOT NULL,
+    simulated        INTEGER NOT NULL DEFAULT 0,
+    test             INTEGER NOT NULL DEFAULT 0,
+    recipient        TEXT NOT NULL,
+    type             TEXT NOT NULL,
+    severity         TEXT NOT NULL DEFAULT '',
+    title            TEXT NOT NULL DEFAULT '',
+    message          TEXT NOT NULL,
+    details          TEXT NOT NULL DEFAULT '',
+    interactive      INTEGER NOT NULL DEFAULT 1,
+    user_requested   INTEGER NOT NULL DEFAULT 0,
+    idempotency_key  TEXT NOT NULL DEFAULT '',
+    state            TEXT NOT NULL,
+    outcome          TEXT NOT NULL DEFAULT '',
+    reason           TEXT NOT NULL DEFAULT '',
+    attempt          INTEGER NOT NULL DEFAULT 1,
+    parent_call_id   TEXT NOT NULL DEFAULT '',
+    origin           TEXT NOT NULL DEFAULT 'api',
+    scheduled_at     TEXT NOT NULL,
+    expires_at       TEXT NOT NULL,
+    ring_deadline    TEXT NOT NULL DEFAULT '',
+    rang_at          TEXT NOT NULL DEFAULT '',
+    answered_at      TEXT NOT NULL DEFAULT '',
+    answered_by      TEXT NOT NULL DEFAULT '',
+    ended_at         TEXT NOT NULL DEFAULT '',
+    last_activity_at TEXT NOT NULL,
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_voice_calls_idem
+    ON voice_calls(agent, idempotency_key) WHERE idempotency_key <> '';
+CREATE INDEX IF NOT EXISTS idx_voice_calls_due       ON voice_calls(state, scheduled_at);
+CREATE INDEX IF NOT EXISTS idx_voice_calls_recipient ON voice_calls(recipient, state);
+
+CREATE TABLE IF NOT EXISTS voice_call_log (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    call_id    TEXT NOT NULL,
+    at         TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    from_state TEXT NOT NULL DEFAULT '',
+    to_state   TEXT NOT NULL DEFAULT '',
+    actor      TEXT NOT NULL DEFAULT '',
+    detail     TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_voice_call_log_call ON voice_call_log(call_id);
+
+-- Which devices a call rang; a device may only see and act on calls it was rung for.
+CREATE TABLE IF NOT EXISTS voice_call_rings (
+    call_id   TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    at        TEXT NOT NULL,
+    status    TEXT NOT NULL,
+    error     TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (call_id, device_id)
+);
+
+-- One row per spoken turn, keyed by the device's sequence number so a retried
+-- request replays the stored reply instead of acting twice. The transcript is
+-- not stored unless voice.store_transcripts is set.
+CREATE TABLE IF NOT EXISTS voice_turns (
+    call_id    TEXT NOT NULL,
+    seq        INTEGER NOT NULL,
+    device_id  TEXT NOT NULL,
+    at         TEXT NOT NULL,
+    intent     TEXT NOT NULL,
+    transcript TEXT NOT NULL DEFAULT '',
+    response   TEXT NOT NULL,
+    PRIMARY KEY (call_id, seq)
+);
+
+CREATE TABLE IF NOT EXISTS voice_devices (
+    id               TEXT PRIMARY KEY,
+    user             TEXT NOT NULL,
+    name             TEXT NOT NULL,
+    platform         TEXT NOT NULL DEFAULT 'ios',
+    bundle_id        TEXT NOT NULL DEFAULT '',
+    apns_environment TEXT NOT NULL DEFAULT 'development',
+    voip_token       TEXT NOT NULL DEFAULT '',
+    secret_hash      TEXT NOT NULL UNIQUE,
+    disabled         INTEGER NOT NULL DEFAULT 0,
+    created_at       TEXT NOT NULL,
+    last_seen_at     TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_voice_devices_user ON voice_devices(user);
+
+CREATE TABLE IF NOT EXISTS voice_enrollments (
+    code_hash  TEXT PRIMARY KEY,
+    user       TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used_at    TEXT NOT NULL DEFAULT '',
+    device_id  TEXT NOT NULL DEFAULT ''
+);

@@ -19,6 +19,7 @@ type Config struct {
 	Dedupe    DedupeConfig   `yaml:"dedupe"`
 	Delivery  DeliveryConfig `yaml:"delivery"`
 	Log       LogConfig      `yaml:"log"`
+	Voice     VoiceConfig    `yaml:"voice"`
 	Providers []ProviderSeed `yaml:"providers"`
 	Routes    []RouteSeed    `yaml:"routes"`
 }
@@ -253,6 +254,7 @@ func (c *Config) applyZeroDefaults() {
 	if c.Log.Format == "" {
 		c.Log.Format = d.Log.Format
 	}
+	c.Voice.applyDefaults()
 	if c.Log.Forward.Enabled {
 		fw := &c.Log.Forward
 		if fw.Service == "" {
@@ -319,6 +321,9 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("route %q references unknown provider %q", r.Name, pn)
 			}
 		}
+	}
+	if err := c.Voice.validate(); err != nil {
+		return err
 	}
 	if c.Log.Forward.Enabled {
 		fw := c.Log.Forward

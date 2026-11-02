@@ -10,4 +10,8 @@ type NotificationMessage struct {
 	Route string
 	// Test indicates a synthetic message sent via POST /api/v1/test.
 	Test bool
+	// EventRef and DeliveryID identify the stored event and delivery (zero for
+	// test sends). Providers with their own lifecycle (voice_call) key on them.
+	EventRef   int64
+	DeliveryID int64
 }

@@ -106,3 +106,66 @@ routes:
     is_default: true            # only used when no other route matches
     providers:
       - discord-home
+
+# VOICE_CALL channel: real incoming calls on the owner's iPhone (the Omni Notify
+# app: PushKit + CallKit, with Gobbie's on-device Kokoro voice). Off unless
+# enabled. Voice is a delivery channel, not a severity: any severity can ring,
+# and an agent cannot raise its own rights by raising severity.
+voice:
+  enabled: false
+  ring_timeout: 45s            # server marks a ringing call missed after this
+  device_ring_timeout: 30s     # the phone stops ringing after this
+  active_timeout: 5m           # an answered call with no device activity fails
+  default_expiry: 2h           # how late a deferred/retried call may still ring
+  # store_transcripts: false   # only the interpreted intent is stored by default
+
+  # Token-based APNs (.p8 key from the Apple developer portal). Without key_id,
+  # nothing is pushed and phones must poll while in the foreground (development).
+  apns:
+    key_id: "${APNS_KEY_ID}"
+    team_id: "LVZHYJD66T"
+    key_path: "/run/secrets/apns-voip.p8"
+    topic: "dev.pod32g.OmniNotify"   # ".voip" is appended
+
+  # Agents authenticate with an Omni-Identity client_credentials token (sub = aud
+  # = the client id below), or, for local use, a static token given as its SHA-256.
+  identity:
+    issuer: "https://identity.omni.pod32g.dev"
+    jwks_url: "https://identity.omni.pod32g.dev/jwks.json"
+
+  agents:
+    - id: claude
+      display_name: Claude          # shown on the incoming-call screen
+      identity_clients: [omni-notify-claude]
+      # token_sha256: ["<sha256 of a static token>"]
+      may_override_quiet_hours_for_user_reminders: true
+      allow_test: true
+      # actions: [acknowledge, dismiss, snooze, reschedule]   # the default
+    - id: gpt
+      display_name: GPT
+      identity_clients: [omni-notify-gpt]
+    - id: omni-oncall
+      display_name: Omni Oncall
+      identity_clients: [omni-oncall]
+      may_override_quiet_hours_when_critical: true
+      actions: [acknowledge]
+
+  users:
+    - id: pod32g
+      aliases: [me]
+      timezone: America/Mexico_City
+      allowed_agents: [claude, gpt, omni-oncall]
+      quiet_hours: {start: "23:00", end: "08:00"}
+      exceptions:
+        explicit_user_reminders: true   # for agents granted the override above
+        critical_incidents: true        # likewise
+      rate_limit: {max_calls_per_hour: 5, cooldown: 1m}
+      retry: {max_attempts: 2, delay: 2m}   # a missed call is tried once more
+      max_snooze: 12h
+      # fallback_provider: discord-home     # gets the notification if the call goes unanswered
+
+# To ring for routed events too, add a voice_call provider and name it in a route:
+#   providers:
+#     - name: call-me
+#       kind: voice_call
+#       config: {recipient: me, agent: omni-oncall}

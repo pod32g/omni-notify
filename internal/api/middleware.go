@@ -92,26 +92,35 @@ func (s *Server) maxBodyMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// authMiddleware enforces bearer-token auth on all paths except /healthz and
-// (unless configured otherwise) /metrics.
+// authMiddleware enforces bearer-token auth on all paths except /healthz,
+// device enrollment and (unless configured otherwise) /metrics. It resolves
+// the credential to a principal: the admin tokens reach everything, while
+// agent and device credentials (voice calls only) are confined to the voice
+// endpoints and checked further by those handlers.
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.isExempt(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !s.authorized(r) {
+		p, ok := s.authenticate(r)
+		if !ok {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="omni-notify"`)
 			writeError(w, http.StatusUnauthorized, "missing or invalid bearer token")
 			return
 		}
-		next.ServeHTTP(w, r)
+		if p.kind != principalAdmin && !isVoicePath(r.URL.Path) {
+			writeError(w, http.StatusForbidden, "this credential may only use the voice call API")
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(withPrincipal(r.Context(), p)))
 	})
 }
 
 // isExempt reports whether a path bypasses authentication. The UI shell ("/" and
 // its static assets) and /healthz are always open; the JS calls the authenticated
-// API with a bearer token. /metrics is open unless configured otherwise.
+// API with a bearer token. /metrics is open unless configured otherwise. Device
+// enrollment authenticates with the one-time code in its body.
 func (s *Server) isExempt(path string) bool {
 	if path == "/healthz" || path == "/" || strings.HasPrefix(path, "/assets/") {
 		return true
@@ -119,18 +128,30 @@ func (s *Server) isExempt(path string) bool {
 	if path == "/metrics" && !s.cfg.MetricsRequireAuth {
 		return true
 	}
+	if path == "/api/v1/devices/enroll" && s.cfg.Voice != nil {
+		return true
+	}
 	return false
 }
 
-// authorized performs a constant-time comparison of the presented bearer token
-// against the configured tokens.
-func (s *Server) authorized(r *http.Request) bool {
+// bearer returns the presented bearer token, if any.
+func bearer(r *http.Request) string {
 	const prefix = "Bearer "
 	h := r.Header.Get("Authorization")
 	if !strings.HasPrefix(h, prefix) {
-		return false
+		return ""
 	}
-	presented := []byte(strings.TrimSpace(h[len(prefix):]))
+	return strings.TrimSpace(h[len(prefix):])
+}
+
+// authorized performs a constant-time comparison of the presented bearer token
+// against the configured admin tokens.
+func (s *Server) authorized(r *http.Request) bool {
+	return s.isAdminToken(bearer(r))
+}
+
+func (s *Server) isAdminToken(tok string) bool {
+	presented := []byte(tok)
 	if len(presented) == 0 {
 		return false
 	}
